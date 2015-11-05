@@ -253,7 +253,7 @@ class Soap extends BaseRestService
 
         $result = static::object2Array($result);
 
-        return current($result);
+        return $result;
     }
 
     /**
