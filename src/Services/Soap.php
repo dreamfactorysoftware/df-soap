@@ -4,13 +4,19 @@ namespace DreamFactory\Core\Soap\Services;
 use DreamFactory\Core\Components\Cacheable;
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
-use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
 use DreamFactory\Core\Services\BaseRestService;
+use DreamFactory\Core\Soap\FunctionSchema;
+use DreamFactory\Core\Utility\ApiDocUtilities;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Library\Utility\ArrayUtils;
 
+/**
+ * Class Soap
+ *
+ * @package DreamFactory\Core\Soap\Services
+ */
 class Soap extends BaseRestService
 {
     use Cacheable;
@@ -35,6 +41,10 @@ class Soap extends BaseRestService
      * @type array
      */
     protected $functions = [];
+    /**
+     * @type array
+     */
+    protected $types = [];
 
     //*************************************************************************
     //* Methods
@@ -101,30 +111,40 @@ class Soap extends BaseRestService
         $result = $this->getFunctions($refresh);
         $resources = [];
         foreach ($result as $function) {
-            $name = $function['name'];
-            $access = $this->getPermissions($name);
+            $access = $this->getPermissions($function->name);
             if (!empty($access)) {
-                $function['access'] = VerbsMask::maskToArray($access);
-                $resources[] = $function;
+                $out = $function->toArray();
+                $out['access'] = VerbsMask::maskToArray($access);
+                $resources[] = $out;
             }
         }
 
         return $resources;
     }
 
+    /**
+     * @param bool $refresh
+     *
+     * @return FunctionSchema[]
+     */
     public function getFunctions($refresh = false)
     {
         if ($refresh ||
             (empty($this->functions) &&
                 (null === $this->functions = $this->getFromCache('functions')))
         ) {
+            $functions = $this->client->__getFunctions();
+            $structures = $this->getTypes($refresh);
             $names = [];
-            $result = $this->client->__getFunctions();
-            foreach ($result as $function) {
-                $name = strstr(substr($function, strpos($function, ' ') + 1), '(', true);
-                $names[strtolower($name)] = ['name' => $name, 'function' => $function];
+            foreach ($functions as $function) {
+                $schema = new FunctionSchema($function);
+                $schema->requestFields =
+                    isset($structures[$schema->requestType]) ? $structures[$schema->requestType] : null;
+                $schema->responseFields =
+                    isset($structures[$schema->responseType]) ? $structures[$schema->responseType] : null;
+                $names[strtolower($schema->name)] = $schema;
             }
-            natcasesort($names);
+            ksort($names);
             $this->functions = $names;
             $this->addToCache('functions', $this->functions, true);
         }
@@ -132,10 +152,63 @@ class Soap extends BaseRestService
         return $this->functions;
     }
 
+    public function parseWsdlStructure($structure)
+    {
+    }
+
+    /**
+     * @param bool $refresh
+     *
+     * @return FunctionSchema[]
+     */
+    public function getTypes($refresh = false)
+    {
+        if ($refresh ||
+            (empty($this->types) &&
+                (null === $this->types = $this->getFromCache('types')))
+        ) {
+            $types = $this->client->__getTypes();
+            $structures = [];
+            foreach ($types as $type) {
+                if (0 === substr_compare($type, 'struct ', 0, 7)) {
+                    // declared as "struct type { data_type field; ...}
+                    $type = substr($type, 7);
+                    $name = strstr($type, ' ', true);
+                    $body = trim(strstr($type, ' '), "{} \t\n\r\0\x0B");
+                    $parameters = [];
+                    foreach (explode(';', $body) as $param) {
+                        // declared as "type data_type"
+                        $parts = explode(' ', trim($param));
+                        if (count($parts) > 1) {
+                            $parameters[trim($parts[1])] = trim($parts[0]);
+                        }
+                    }
+                    $structures[$name] = $parameters;
+                } else {
+                    // declared as "type data_type"
+                    $parts = explode(' ', $type);
+                    if (count($parts) > 1) {
+                        $structures[$parts[0]] = $parts[1];
+                    }
+                }
+            }
+            ksort($structures);
+            $this->types = $structures;
+            $this->addToCache('types', $this->types, true);
+        }
+
+        return $this->types;
+    }
+
+    /**
+     *
+     */
     public function refreshTableCache()
     {
         $this->removeFromCache('functions');
         $this->functions = [];
+        $this->removeFromCache('types');
+        $this->types = [];
     }
 
     /**
@@ -143,7 +216,7 @@ class Soap extends BaseRestService
      * @param bool   $returnName If true, the function name is returned instead of TRUE
      *
      * @throws \InvalidArgumentException
-     * @return bool
+     * @return bool|string
      */
     public function doesFunctionExist($name, $returnName = false)
     {
@@ -157,18 +230,30 @@ class Soap extends BaseRestService
         //	Search normal, return real name
         $ndx = strtolower($name);
         if (isset($functions[$ndx])) {
-            return $returnName ? $functions[$ndx]['name'] : true;
+            return $returnName ? $functions[$ndx]->name : true;
         }
 
         return false;
     }
 
+    /**
+     * @param $function
+     * @param $payload
+     *
+     * @return mixed
+     * @throws \DreamFactory\Core\Exceptions\NotFoundException
+     */
     protected function callFunction($function, $payload)
     {
+        if (false === ($function = $this->doesFunctionExist($function, true))) {
+            throw new NotFoundException("Function '$function' does not exist on this service.");
+        }
+
         $result = $this->client->$function($payload);
 
         $result = static::object2Array($result);
-        return current($result);
+
+        return $result;
     }
 
     /**
@@ -180,11 +265,7 @@ class Soap extends BaseRestService
             return parent::handleGET();
         }
 
-        if (false === ($function = $this->doesFunctionExist($this->resource, true))) {
-            throw new NotFoundException('Function "' . $this->resource . '" does not exist on this service.');
-        }
-
-        $result = $this->callFunction($function, $this->request->getParameters());
+        $result = $this->callFunction($this->resource, $this->request->getParameters());
 
         $asList = $this->request->getParameterAsBool(ApiOptions::AS_LIST);
         $idField = $this->request->getParameter(ApiOptions::ID_FIELD, $this->getResourceIdentifier());
@@ -207,16 +288,7 @@ class Soap extends BaseRestService
             return false;
         }
 
-        if (false === ($function = $this->doesFunctionExist($this->resource, true))) {
-            throw new NotFoundException('Function "' . $this->resource . '" does not exist on this service.');
-        }
-
-        $payload = $this->request->getPayloadData();
-        if (empty($payload)) {
-            throw new BadRequestException('No record(s) detected in request.');
-        }
-
-        $result = $this->callFunction($function, $payload);
+        $result = $this->callFunction($this->resource, $this->request->getPayloadData());
 
         $asList = $this->request->getParameterAsBool(ApiOptions::AS_LIST);
         $idField = $this->request->getParameter(ApiOptions::ID_FIELD, $this->getResourceIdentifier());
@@ -227,20 +299,96 @@ class Soap extends BaseRestService
 
     public function getApiDocModels()
     {
-        return [];
+        $models = [];
+        foreach ($this->getTypes() as $name => $parameters) {
+            if (!isset($models[$name])) {
+                $properties = [];
+                if (is_array($parameters)) {
+                    foreach ($parameters as $field => $type) {
+                        $properties[$field] = ['type' => $type, 'description' => ''];
+                    }
+                    $models[$name] = ['id' => $name, 'properties' => $properties];
+                }
+            }
+        }
+
+//            'ResourceList'       => [
+//                'id'         => 'ResourceList',
+//                'properties' => [
+//                    $wrapper => [
+//                        'type'        => 'array',
+//                        'description' => 'Array of accessible resources available to this service.',
+//                        'items'       => [
+//                            'type' => 'string',
+//                        ],
+//                    ],
+//                ],
+//            ],
+
+        return $models;
     }
 
+    /**
+     * @return array
+     */
     public function getApiDocInfo()
     {
-        return [
-            'resourcePath' => '/' . $this->name,
-            'produces'     => ['application/json', 'application/xml'],
-            'consumes'     => ['application/json', 'application/xml'],
-            'apis'         => [],
-            'models'       => [],
-        ];
+        $path = '/' . $this->name;
+        $eventPath = $this->name;
+        $commonResponses = ApiDocUtilities::getCommonResponses();
+        $base = parent::getApiDocInfo();
+
+        $apis = [];
+        $models = $this->getApiDocModels();
+
+        foreach ($this->getFunctions() as $resource) {
+
+            $access = $this->getPermissions($resource->name);
+            if (!empty($access)) {
+
+                $apis[] = [
+                    'path'        => $path . '/' . $resource->name,
+                    'description' => 'SOAP Action.',
+                    'operations'  =>
+                        [
+                            [
+                                'method'           => 'POST',
+                                'summary'          => $resource->name . '()',
+                                'nickname'         => $resource->name,
+                                'notes'            => $resource->description,
+                                'type'             => $resource->responseType,
+                                'event_name'       => [
+                                    $eventPath . '.' . $resource->name . '.call',
+                                    $eventPath . '.function_called',
+                                ],
+                                'parameters'       => [
+                                    [
+                                        'name'          => 'body',
+                                        'description'   => 'Data containing name-value pairs of fields to send.',
+                                        'allowMultiple' => false,
+                                        'type'          => $resource->requestType,
+                                        'paramType'     => 'body',
+                                        'required'      => true,
+                                    ],
+                                ],
+                                'responseMessages' => $commonResponses,
+                            ],
+                        ],
+                ];
+            }
+        }
+
+        $base['apis'] = array_merge($base['apis'], $apis);
+        $base['models'] = array_merge($base['models'], $models);
+
+        return $base;
     }
 
+    /**
+     * @param $object
+     *
+     * @return array
+     */
     protected static function object2Array($object)
     {
         if (is_object($object)) {
