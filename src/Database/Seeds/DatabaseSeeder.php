@@ -1,5 +1,5 @@
 <?php
-namespace DreamFactory\Core\Rws\Database\Seeds;
+namespace DreamFactory\Core\Soap\Database\Seeds;
 
 use DreamFactory\Core\Database\Seeds\BaseModelSeeder;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
