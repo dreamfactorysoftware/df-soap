@@ -6,11 +6,12 @@ use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
+use DreamFactory\Core\Models\Service;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Soap\FunctionSchema;
-use DreamFactory\Core\Utility\ApiDocUtilities;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Library\Utility\ArrayUtils;
+use DreamFactory\Library\Utility\Inflector;
 
 /**
  * Class Soap
@@ -268,7 +269,7 @@ class Soap extends BaseRestService
         $result = $this->callFunction($this->resource, $this->request->getParameters());
 
         $asList = $this->request->getParameterAsBool(ApiOptions::AS_LIST);
-        $idField = $this->request->getParameter(ApiOptions::ID_FIELD, $this->getResourceIdentifier());
+        $idField = $this->request->getParameter(ApiOptions::ID_FIELD, static::getResourceIdentifier());
         $result = ResourcesWrapper::cleanResources($result, $asList, $idField, ApiOptions::FIELDS_ALL, !empty($meta));
 
         return $result;
@@ -291,7 +292,7 @@ class Soap extends BaseRestService
         $result = $this->callFunction($this->resource, $this->request->getPayloadData());
 
         $asList = $this->request->getParameterAsBool(ApiOptions::AS_LIST);
-        $idField = $this->request->getParameter(ApiOptions::ID_FIELD, $this->getResourceIdentifier());
+        $idField = $this->request->getParameter(ApiOptions::ID_FIELD, static::getResourceIdentifier());
         $result = ResourcesWrapper::cleanResources($result, $asList, $idField, ApiOptions::FIELDS_ALL, !empty($meta));
 
         return $result;
@@ -312,74 +313,64 @@ class Soap extends BaseRestService
             }
         }
 
-//            'ResourceList'       => [
-//                'id'         => 'ResourceList',
-//                'properties' => [
-//                    $wrapper => [
-//                        'type'        => 'array',
-//                        'description' => 'Array of accessible resources available to this service.',
-//                        'items'       => [
-//                            'type' => 'string',
-//                        ],
-//                    ],
-//                ],
-//            ],
-
         return $models;
     }
 
     /**
-     * @return array
+     * {@inheritdoc}
      */
-    public function getApiDocInfo()
+    public static function getApiDocInfo(Service $service)
     {
-        $path = '/' . $this->name;
-        $eventPath = $this->name;
-        $commonResponses = ApiDocUtilities::getCommonResponses();
-        $base = parent::getApiDocInfo();
+        $name = strtolower($service->name);
+        $capitalized = Inflector::camelize($service->name);
+        $base = parent::getApiDocInfo($service);
 
         $apis = [];
-        $models = $this->getApiDocModels();
 
-        foreach ($this->getFunctions() as $resource) {
+        /** @var BaseRestService $serviceClass */
+        $serviceClass = $service->serviceType()->first()->class_name;
+        $settings = $service->toArray();
+        /** @var Soap $obj */
+        $obj = new $serviceClass($settings);
+        foreach ($obj->getFunctions() as $resource) {
 
-            $access = $this->getPermissions($resource->name);
+            $access = $obj->getPermissions($resource->name);
             if (!empty($access)) {
 
-                $apis[] = [
-                    'path'        => $path . '/' . $resource->name,
-                    'description' => 'SOAP Action.',
-                    'operations'  =>
-                        [
+                $apis[$name . '/' . $resource->name] = [
+                    'post' => [
+                        'tags'        => [$name],
+                        'operationId' => 'call'.$capitalized.$resource->name,
+                        'description' => $resource->description,
+                        'event_name'  => [
+                            $name . '.' . $resource->name . '.call',
+                            $name . '.function_called',
+                        ],
+                        'parameters'  => [
                             [
-                                'method'           => 'POST',
-                                'summary'          => $resource->name . '()',
-                                'nickname'         => $resource->name,
-                                'notes'            => $resource->description,
-                                'type'             => $resource->responseType,
-                                'event_name'       => [
-                                    $eventPath . '.' . $resource->name . '.call',
-                                    $eventPath . '.function_called',
-                                ],
-                                'parameters'       => [
-                                    [
-                                        'name'          => 'body',
-                                        'description'   => 'Data containing name-value pairs of fields to send.',
-                                        'allowMultiple' => false,
-                                        'type'          => $resource->requestType,
-                                        'paramType'     => 'body',
-                                        'required'      => true,
-                                    ],
-                                ],
-                                'responseMessages' => $commonResponses,
+                                'name'        => 'body',
+                                'description' => 'Data containing name-value pairs of fields to send.',
+                                'schema'      => ['$ref' => '#/definitions/' . $resource->requestType],
+                                'in'          => 'body',
+                                'required'    => true,
                             ],
                         ],
+                        'responses'   => [
+                            '200'     => [
+                                'description' => 'Success',
+                                'schema'      => ['$ref' => '#/definitions/' . $resource->responseType]
+                            ],
+                            'default' => [
+                                'description' => 'Error',
+                                'schema'      => ['$ref' => '#/definitions/Error']
+                            ]
+                        ],
+                    ],
                 ];
             }
         }
 
         $base['apis'] = array_merge($base['apis'], $apis);
-        $base['models'] = array_merge($base['models'], $models);
 
         return $base;
     }
