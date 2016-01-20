@@ -298,24 +298,6 @@ class Soap extends BaseRestService
         return $result;
     }
 
-    public function getApiDocModels()
-    {
-        $models = [];
-        foreach ($this->getTypes() as $name => $parameters) {
-            if (!isset($models[$name])) {
-                $properties = [];
-                if (is_array($parameters)) {
-                    foreach ($parameters as $field => $type) {
-                        $properties[$field] = ['type' => $type, 'description' => ''];
-                    }
-                    $models[$name] = ['id' => $name, 'properties' => $properties];
-                }
-            }
-        }
-
-        return $models;
-    }
-
     /**
      * {@inheritdoc}
      */
@@ -340,7 +322,8 @@ class Soap extends BaseRestService
                 $apis[$name . '/' . $resource->name] = [
                     'post' => [
                         'tags'        => [$name],
-                        'operationId' => 'call'.$capitalized.$resource->name,
+                        'operationId' => 'call' . $capitalized . $resource->name,
+                        'summary'     => 'call' . $capitalized . $resource->name . '()',
                         'description' => $resource->description,
                         'event_name'  => [
                             $name . '.' . $resource->name . '.call',
@@ -370,7 +353,21 @@ class Soap extends BaseRestService
             }
         }
 
-        $base['apis'] = array_merge($base['apis'], $apis);
+        $models = [];
+        foreach ($obj->getTypes() as $name => $parameters) {
+            if (!isset($models[$name])) {
+                $properties = [];
+                if (is_array($parameters)) {
+                    foreach ($parameters as $field => $type) {
+                        $properties[$field] = ['type' => $type, 'description' => ''];
+                    }
+                    $models[$name] = ['id' => $name, 'properties' => $properties];
+                }
+            }
+        }
+
+        $base['paths'] = array_merge($base['paths'], $apis);
+        $base['definitions'] = array_merge($base['definitions'], $models);
 
         return $base;
     }
