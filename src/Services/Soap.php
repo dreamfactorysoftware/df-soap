@@ -319,7 +319,7 @@ class Soap extends BaseRestService
             $access = $obj->getPermissions($resource->name);
             if (!empty($access)) {
 
-                $apis[$name . '/' . $resource->name] = [
+                $apis['/' . $name . '/' . $resource->name] = [
                     'post' => [
                         'tags'        => [$name],
                         'operationId' => 'call' . $capitalized . $resource->name,
