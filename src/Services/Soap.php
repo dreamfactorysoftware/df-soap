@@ -321,15 +321,15 @@ class Soap extends BaseRestService
 
                 $apis['/' . $name . '/' . $resource->name] = [
                     'post' => [
-                        'tags'        => [$name],
-                        'operationId' => 'call' . $capitalized . $resource->name,
-                        'summary'     => 'call' . $capitalized . $resource->name . '()',
-                        'description' => $resource->description,
-                        'event_name'  => [
+                        'tags'              => [$name],
+                        'operationId'       => 'call' . $capitalized . $resource->name,
+                        'summary'           => 'call' . $capitalized . $resource->name . '()',
+                        'description'       => $resource->description,
+                        'x-publishedEvents' => [
                             $name . '.' . $resource->name . '.call',
                             $name . '.function_called',
                         ],
-                        'parameters'  => [
+                        'parameters'        => [
                             [
                                 'name'        => 'body',
                                 'description' => 'Data containing name-value pairs of fields to send.',
@@ -338,7 +338,7 @@ class Soap extends BaseRestService
                                 'required'    => true,
                             ],
                         ],
-                        'responses'   => [
+                        'responses'         => [
                             '200'     => [
                                 'description' => 'Success',
                                 'schema'      => ['$ref' => '#/definitions/' . $resource->responseType]
@@ -361,7 +361,7 @@ class Soap extends BaseRestService
                     foreach ($parameters as $field => $type) {
                         $properties[$field] = ['type' => $type, 'description' => ''];
                     }
-                    $models[$name] = ['id' => $name, 'properties' => $properties];
+                    $models[$name] = ['type' => $name, 'properties' => $properties];
                 }
             }
         }
