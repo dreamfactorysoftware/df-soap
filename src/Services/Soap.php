@@ -72,8 +72,16 @@ class Soap extends BaseRestService
             }
         }
         $options = ArrayUtils::get($config, 'options', []);
-        if (empty($options)) {
+        if (!is_array($options)) {
             $options = [];
+        } else {
+            foreach ($options as $key => $value) {
+                if (!is_numeric($value)) {
+                    if (defined($value)) {
+                        $options[$key] = constant($value);
+                    }
+                }
+            }
         }
 
         $this->cacheEnabled = ArrayUtils::getBool($config, 'cache_enabled');
