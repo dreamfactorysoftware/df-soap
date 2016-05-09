@@ -6,7 +6,6 @@ use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
-use DreamFactory\Core\Models\Service;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
@@ -309,22 +308,17 @@ class Soap extends BaseRestService
     /**
      * {@inheritdoc}
      */
-    public static function getApiDocInfo(Service $service)
+    public function getApiDocInfo()
     {
-        $name = strtolower($service->name);
-        $capitalized = Inflector::camelize($service->name);
-        $base = parent::getApiDocInfo($service);
+        $name = strtolower($this->name);
+        $capitalized = Inflector::camelize($this->name);
+        $base = parent::getApiDocInfo();
 
         $apis = [];
 
-        /** @var BaseRestService $serviceClass */
-        $serviceClass = $service->serviceType()->first()->class_name;
-        $settings = $service->toArray();
-        /** @var Soap $obj */
-        $obj = new $serviceClass($settings);
-        foreach ($obj->getFunctions() as $resource) {
+        foreach ($this->getFunctions() as $resource) {
 
-            $access = $obj->getPermissions($resource->name);
+            $access = $this->getPermissions($resource->name);
             if (!empty($access)) {
 
                 $apis['/' . $name . '/' . $resource->name] = [
@@ -362,7 +356,7 @@ class Soap extends BaseRestService
         }
 
         $models = [];
-        foreach ($obj->getTypes() as $name => $parameters) {
+        foreach ($this->getTypes() as $name => $parameters) {
             if (!isset($models[$name])) {
                 $properties = [];
                 if (is_array($parameters)) {
