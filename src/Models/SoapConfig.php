@@ -8,9 +8,9 @@ class SoapConfig extends BaseServiceConfigModel
 {
     protected $table = 'soap_config';
 
-    protected $fillable = ['service_id', 'wsdl', 'options'];
+    protected $fillable = ['service_id', 'wsdl', 'options', 'headers'];
 
-    protected $casts = ['options' => 'array'];
+    protected $casts = ['options' => 'array', 'headers' => 'array'];
 
     /**
      * @param int $id
@@ -93,6 +93,54 @@ class SoapConfig extends BaseServiceConfigModel
                 $schema['description'] =
                     'An array of options for the connection.' .
                     ' For further options, see http://php.net/manual/en/soapclient.soapclient.php.';
+                break;
+            case 'headers':
+                $schema['type'] = 'array';
+                $schema['items'] = [
+                    [
+                        'label'  => 'Type',
+                        'name'   => 'type',
+                        'type'   => 'picklist',
+                        'values' => [
+                            [
+                                'label' => 'Generic',
+                                'name'  => 'generic'
+                            ],
+                            [
+                                'label' => 'WSSE',
+                                'name'  => 'wsse'
+                            ]
+                        ]
+                    ],
+                    [
+                        'label' => 'Namespace',
+                        'name'  => 'namespace',
+                        'type'  => 'string'
+                    ],
+                    [
+                        'label' => 'Name',
+                        'name'  => 'name',
+                        'type'  => 'string'
+                    ],
+                    [
+                        'label' => 'Data',
+                        'name'  => 'data',
+                        'type'  => 'string'
+                    ],
+                    [
+                        'label' => 'MustUnderstand',
+                        'name'  => 'mustunderstand',
+                        'type'  => 'boolean'
+                    ],
+                    [
+                        'label' => 'Actor',
+                        'name'  => 'actor',
+                        'type'  => 'string'
+                    ]
+                ];
+                $schema['description'] =
+                    'An array of headers for the connection. ' .
+                    'For further info, see http://php.net/manual/en/class.soapheader.php.';
                 break;
         }
     }

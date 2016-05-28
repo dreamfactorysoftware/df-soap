@@ -6,8 +6,8 @@ use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
-use DreamFactory\Core\Models\Service;
 use DreamFactory\Core\Services\BaseRestService;
+use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Library\Utility\ArrayUtils;
@@ -61,8 +61,8 @@ class Soap extends BaseRestService
     public function __construct($settings)
     {
         parent::__construct($settings);
-        $config = ArrayUtils::get($settings, 'config', []);
-        $this->wsdl = ArrayUtils::get($config, 'wsdl');
+        $config = array_get($settings, 'config', []);
+        $this->wsdl = array_get($config, 'wsdl');
 
         // Validate url setup
         if (empty($this->wsdl)) {
@@ -71,7 +71,7 @@ class Soap extends BaseRestService
                 throw new \InvalidArgumentException('SOAP Services require either a WSDL or both location and URI to be configured.');
             }
         }
-        $options = ArrayUtils::get($config, 'options', []);
+        $options = array_get($config, 'options', []);
         if (!is_array($options)) {
             $options = [];
         } else {
@@ -85,11 +85,46 @@ class Soap extends BaseRestService
         }
 
         $this->cacheEnabled = ArrayUtils::getBool($config, 'cache_enabled');
-        $this->cacheTTL = intval(ArrayUtils::get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
+        $this->cacheTTL = intval(array_get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
         $this->cachePrefix = 'service_' . $this->id . ':';
 
         try {
             $this->client = @new \SoapClient($this->wsdl, $options);
+
+            $headers = array_get($config, 'headers', []);
+            $soapHeaders = null;
+
+            foreach ($headers as $header) {
+                $headerType = array_get($header, 'type', 'generic');
+                switch ($headerType) {
+                    case 'wsse':
+                        $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
+                        $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                        $username = array_get($data, 'username');
+                        $password = array_get($data, 'password');
+
+                        if (!empty($username) && !empty($password)) {
+                            $soapHeaders[] = new WsseAuthHeader($username, $password);
+                        }
+
+                        break;
+                    default:
+                        $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
+                        $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                        $namespace = array_get($header, 'namespace');
+                        $name = array_get($header, 'name');
+                        $mustUnderstand = array_get($header, 'mustunderstand', false);
+                        $actor = array_get($header, 'actor');
+
+                        if (!empty($namespace) && !empty($name) && !empty($data)) {
+                            $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
+                        }
+                }
+            }
+
+            if (!empty($soapHeaders)) {
+                $this->client->__setSoapHeaders($soapHeaders);
+            }
         } catch (\Exception $ex) {
             throw new InternalServerErrorException("Unexpected SOAP Service Exception:\n{$ex->getMessage()}");
         }
@@ -309,22 +344,17 @@ class Soap extends BaseRestService
     /**
      * {@inheritdoc}
      */
-    public static function getApiDocInfo(Service $service)
+    public function getApiDocInfo()
     {
-        $name = strtolower($service->name);
-        $capitalized = Inflector::camelize($service->name);
-        $base = parent::getApiDocInfo($service);
+        $name = strtolower($this->name);
+        $capitalized = Inflector::camelize($this->name);
+        $base = parent::getApiDocInfo();
 
         $apis = [];
 
-        /** @var BaseRestService $serviceClass */
-        $serviceClass = $service->serviceType()->first()->class_name;
-        $settings = $service->toArray();
-        /** @var Soap $obj */
-        $obj = new $serviceClass($settings);
-        foreach ($obj->getFunctions() as $resource) {
+        foreach ($this->getFunctions() as $resource) {
 
-            $access = $obj->getPermissions($resource->name);
+            $access = $this->getPermissions($resource->name);
             if (!empty($access)) {
 
                 $apis['/' . $name . '/' . $resource->name] = [
@@ -362,7 +392,7 @@ class Soap extends BaseRestService
         }
 
         $models = [];
-        foreach ($obj->getTypes() as $name => $parameters) {
+        foreach ($this->getTypes() as $name => $parameters) {
             if (!isset($models[$name])) {
                 $properties = [];
                 if (is_array($parameters)) {
