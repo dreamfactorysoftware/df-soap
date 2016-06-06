@@ -91,39 +91,40 @@ class Soap extends BaseRestService
         try {
             $this->client = @new \SoapClient($this->wsdl, $options);
 
-            $headers = array_get($config, 'headers', []);
+            $headers = array_get($config, 'headers');
             $soapHeaders = null;
 
-            foreach ($headers as $header) {
-                $headerType = array_get($header, 'type', 'generic');
-                switch ($headerType) {
-                    case 'wsse':
-                        $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
-                        $data = (is_null($data) || !is_array($data)) ? [] : $data;
-                        $username = array_get($data, 'username');
-                        $password = array_get($data, 'password');
+            if (!empty($headers)) {
+                foreach ($headers as $header) {
+                    $headerType = array_get($header, 'type', 'generic');
+                    switch ($headerType) {
+                        case 'wsse':
+                            $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
+                            $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                            $username = array_get($data, 'username');
+                            $password = array_get($data, 'password');
 
-                        if (!empty($username) && !empty($password)) {
-                            $soapHeaders[] = new WsseAuthHeader($username, $password);
-                        }
+                            if (!empty($username) && !empty($password)) {
+                                $soapHeaders[] = new WsseAuthHeader($username, $password);
+                            }
 
-                        break;
-                    default:
-                        $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
-                        $data = (is_null($data) || !is_array($data)) ? [] : $data;
-                        $namespace = array_get($header, 'namespace');
-                        $name = array_get($header, 'name');
-                        $mustUnderstand = array_get($header, 'mustunderstand', false);
-                        $actor = array_get($header, 'actor');
+                            break;
+                        default:
+                            $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
+                            $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                            $namespace = array_get($header, 'namespace');
+                            $name = array_get($header, 'name');
+                            $mustUnderstand = array_get($header, 'mustunderstand', false);
+                            $actor = array_get($header, 'actor');
 
-                        if (!empty($namespace) && !empty($name) && !empty($data)) {
-                            $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
-                        }
+                            if (!empty($namespace) && !empty($name) && !empty($data)) {
+                                $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
+                            }
+                    }
                 }
-            }
-
-            if (!empty($soapHeaders)) {
-                $this->client->__setSoapHeaders($soapHeaders);
+                if (!empty($soapHeaders)) {
+                    $this->client->__setSoapHeaders($soapHeaders);
+                }
             }
         } catch (\Exception $ex) {
             throw new InternalServerErrorException("Unexpected SOAP Service Exception:\n{$ex->getMessage()}");
