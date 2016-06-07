@@ -294,11 +294,14 @@ class Soap extends BaseRestService
             throw new NotFoundException("Function '$function' does not exist on this service.");
         }
 
-        $result = $this->client->$function($payload);
+        try {
+            $result = $this->client->$function($payload);
+            $result = static::object2Array($result);
 
-        $result = static::object2Array($result);
-
-        return $result;
+            return $result;
+        } catch (\SoapFault $e) {
+            throw new InternalServerErrorException($e->getMessage(), $e->faultcode);
+        }
     }
 
     /**
