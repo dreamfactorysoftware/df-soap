@@ -12,6 +12,7 @@ use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Library\Utility\ArrayUtils;
 use DreamFactory\Library\Utility\Inflector;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Class Soap
@@ -287,6 +288,7 @@ class Soap extends BaseRestService
      *
      * @return mixed
      * @throws \DreamFactory\Core\Exceptions\NotFoundException
+     * @throws InternalServerErrorException
      */
     protected function callFunction($function, $payload)
     {
@@ -300,7 +302,13 @@ class Soap extends BaseRestService
 
             return $result;
         } catch (\SoapFault $e) {
-            throw new InternalServerErrorException($e->getMessage(), $e->faultcode);
+            $faultCode = $e->faultcode;
+            $errorCode = Response::HTTP_INTERNAL_SERVER_ERROR;
+            // Fault code can be a string.
+            if (is_numeric($faultCode) && strpos($faultCode, '.') === false) {
+                $errorCode = $faultCode;
+            }
+            throw new InternalServerErrorException($e->getMessage() . ' [Fault code:' . $faultCode . ']', $errorCode);
         }
     }
 
