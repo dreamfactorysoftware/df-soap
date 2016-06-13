@@ -10,7 +10,6 @@ use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
-use DreamFactory\Library\Utility\ArrayUtils;
 use DreamFactory\Library\Utility\Inflector;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -85,7 +84,7 @@ class Soap extends BaseRestService
             }
         }
 
-        $this->cacheEnabled = ArrayUtils::getBool($config, 'cache_enabled');
+        $this->cacheEnabled = Scalar::boolval(array_get($config, 'cache_enabled'));
         $this->cacheTTL = intval(array_get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
         $this->cachePrefix = 'service_' . $this->id . ':';
 
