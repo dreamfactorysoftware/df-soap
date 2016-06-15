@@ -11,6 +11,7 @@ use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Library\Utility\Inflector;
+use DreamFactory\Library\Utility\Scalar;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -34,6 +35,10 @@ class Soap extends BaseRestService
      * @var \SoapClient
      */
     protected $client;
+    /**
+     * @var \DOMDocument
+     */
+    protected $dom;
     /**
      * @type bool
      */
@@ -90,6 +95,11 @@ class Soap extends BaseRestService
 
         try {
             $this->client = @new \SoapClient($this->wsdl, $options);
+            $this->dom = new \DOMDocument();
+            if (!empty($this->wsdl)) {
+                $this->dom->load($this->wsdl);
+                $this->dom->preserveWhiteSpace = false;
+            }
 
             $headers = array_get($config, 'headers');
             $soapHeaders = null;
@@ -233,7 +243,7 @@ class Soap extends BaseRestService
                     // declared as "type data_type"
                     $parts = explode(' ', $type);
                     if (count($parts) > 1) {
-                        $structures[$parts[0]] = $parts[1];
+                        $structures[$parts[1]] = $parts[0];
                     }
                 }
             }
@@ -301,7 +311,9 @@ class Soap extends BaseRestService
 
             return $result;
         } catch (\SoapFault $e) {
-            $faultCode = $e->faultcode;
+            /** @noinspection PhpUndefinedFieldInspection */
+            $faultCode = (property_exists($e, 'faultcode') ? $e->faultcode : $e->getCode());
+
             $errorCode = Response::HTTP_INTERNAL_SERVER_ERROR;
             // Fault code can be a string.
             if (is_numeric($faultCode) && strpos($faultCode, '.') === false) {
@@ -364,10 +376,7 @@ class Soap extends BaseRestService
         $apis = [];
 
         foreach ($this->getFunctions() as $resource) {
-
-            $access = $this->getPermissions($resource->name);
-            if (!empty($access)) {
-
+            if (!empty($access = $this->getPermissions($resource->name))) {
                 $apis['/' . $name . '/' . $resource->name] = [
                     'post' => [
                         'tags'              => [$name],
@@ -403,14 +412,30 @@ class Soap extends BaseRestService
         }
 
         $models = [];
-        foreach ($this->getTypes() as $name => $parameters) {
+        $types = $this->getTypes();
+        foreach ($types as $name => $parameters) {
             if (!isset($models[$name])) {
-                $properties = [];
                 if (is_array($parameters)) {
+                    $properties = [];
                     foreach ($parameters as $field => $type) {
-                        $properties[$field] = ['type' => $type, 'description' => ''];
+                        if (null === $newType = static::soapType2ApiDocType($type)) {
+                            if (array_key_exists($type, $types)) {
+                                if (null === $newType = static::soapType2ApiDocType($types[$type])) {
+                                    $newType = ['type' => $type];
+                                } else {
+                                    // check for enumerations
+                                    if (!empty($enums = static::domCheckTypeForEnum($this->dom, $type))) {
+                                        $newType['default'] = '';
+                                        $newType['enum'] = $enums;
+                                    }
+                                }
+                            }
+                        }
+                        $properties[$field] = $newType;
                     }
-                    $models[$name] = ['type' => $name, 'properties' => $properties];
+                    $temp = static::soapType2ApiDocType($name);
+                    $temp['properties'] = $properties;
+                    $models[$name] = $temp;
                 }
             }
         }
@@ -419,6 +444,44 @@ class Soap extends BaseRestService
         $base['definitions'] = array_merge($base['definitions'], $models);
 
         return $base;
+    }
+
+    protected static function soapType2ApiDocType($name)
+    {
+        switch ($name) {
+            case 'integer':
+                return ['type' => 'number', 'format' => 'int32', 'description' => 'signed 32 bits'];
+            case 'long':
+                return ['type' => 'number', 'format' => 'int64', 'description' => 'signed 64 bits'];
+            case 'float':
+                return ['type' => 'number', 'format' => 'float', 'description' => ''];
+            case 'double':
+                return ['type' => 'number', 'format' => 'double', 'description' => ''];
+            case 'string':
+                return ['type' => 'string', 'description' => ''];
+            case 'byte':
+                return ['type' => 'string', 'format' => 'byte', 'description' => 'base64 encoded characters'];
+            case 'binary':
+                return ['type' => 'string', 'format' => 'binary', 'description' => 'any sequence of octets'];
+            case 'boolean':
+                return ['type' => 'boolean', 'description' => 'true or false'];
+            case 'date':
+                return ['type' => 'string', 'format' => 'date', 'description' => 'As defined by full-date - RFC3339'];
+            case 'dateTime':
+                return [
+                    'type'        => 'string',
+                    'format'      => 'date-time',
+                    'description' => 'As defined by date-time - RFC3339'
+                ];
+            case 'password':
+                return [
+                    'type'        => 'string',
+                    'format'      => 'password',
+                    'description' => 'Used to hint UIs the input needs to be obscured'
+                ];
+        }
+
+        return null;
     }
 
     /**
@@ -435,5 +498,51 @@ class Soap extends BaseRestService
         } else {
             return $object;
         }
+    }
+
+    protected static function domCheckTypeForEnum($dom, $type)
+    {
+        $values = [];
+        $node = static::domFindType($dom, $type);
+        if (!$node) {
+            return $values;
+        }
+        $value_list = $node->getElementsByTagName('enumeration');
+        if ($value_list->length == 0) {
+            return $values;
+        }
+        for ($i = 0; $i < $value_list->length; $i++) {
+            $values[] = $value_list->item($i)->attributes->getNamedItem('value')->nodeValue;
+        }
+
+        return $values;
+    }
+
+    /**
+     * Look for a type
+     *
+     * @param \DOMDocument $dom
+     * @param string       $class
+     *
+     * @return \DOMNode
+     */
+    protected static function domFindType($dom, $class)
+    {
+        $types_node = $dom->getElementsByTagName('types')->item(0);
+        $schema_list = $types_node->getElementsByTagName('schema');
+        for ($i = 0; $i < $schema_list->length; $i++) {
+            $children = $schema_list->item($i)->getElementsByTagName('simpleType');
+            for ($j = 0; $j < $children->length; $j++) {
+                $node = $children->item($j);
+                if ($node->hasAttributes() &&
+                    $node->attributes->getNamedItem('name') &&
+                    $node->attributes->getNamedItem('name')->nodeValue == $class
+                ) {
+                    return $node;
+                }
+            }
+        }
+
+        return null;
     }
 }
