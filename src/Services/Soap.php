@@ -4,6 +4,8 @@ namespace DreamFactory\Core\Soap\Services;
 use DreamFactory\Core\Components\Cacheable;
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
+use DreamFactory\Core\Events\ResourcePostProcess;
+use DreamFactory\Core\Events\ResourcePreProcess;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
 use DreamFactory\Core\Services\BaseRestService;
@@ -142,15 +144,37 @@ class Soap extends BaseRestService
     }
 
     /**
-     * A chance to pre-process the data.
-     *
-     * @return mixed|void
+     * Runs pre process tasks/scripts
      */
     protected function preProcess()
     {
-        parent::preProcess();
+        if (!empty($this->resourcePath)) {
+            $path = str_replace('/','.',trim($this->resourcePath, '/'));
+            /** @noinspection PhpUnusedLocalVariableInspection */
+            $results = \Event::fire(
+                new ResourcePreProcess($this->name, $path, $this->request)
+            );
+        } else {
+            parent::preProcess();
+        }
 
         $this->checkPermission($this->getRequestedAction(), $this->name);
+    }
+
+    /**
+     * Runs post process tasks/scripts
+     */
+    protected function postProcess()
+    {
+        if (!empty($this->resourcePath)) {
+            $path = str_replace('/','.',trim($this->resourcePath, '/'));
+            $event =
+                new ResourcePostProcess($this->name, $path, $this->request, $this->response);
+            /** @noinspection PhpUnusedLocalVariableInspection */
+            $results = \Event::fire($event);
+        } else {
+            parent::postProcess();
+        }
     }
 
     /**
@@ -205,10 +229,6 @@ class Soap extends BaseRestService
         }
 
         return $this->functions;
-    }
-
-    public function parseWsdlStructure($structure)
-    {
     }
 
     /**
