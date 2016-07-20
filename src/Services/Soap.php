@@ -441,7 +441,7 @@ class Soap extends BaseRestService
                         if (null === $newType = static::soapType2ApiDocType($type)) {
                             if (array_key_exists($type, $types)) {
                                 if (null === $newType = static::soapType2ApiDocType($types[$type])) {
-                                    $newType = ['type' => $type];
+                                    $newType = ['$ref' => '#/definitions/'.$type];
                                 } else {
                                     // check for enumerations
                                     if (!empty($enums = static::domCheckTypeForEnum($this->dom, $type))) {
@@ -449,7 +449,10 @@ class Soap extends BaseRestService
                                         $newType['enum'] = $enums;
                                     }
                                 }
+                            } else {
+                                \Log::alert("SOAP to Swagger found unknown type: $type");
                             }
+
                         }
                         $properties[$field] = $newType;
                     }
@@ -474,11 +477,13 @@ class Soap extends BaseRestService
             case 'long':
                 return ['type' => 'number', 'format' => 'int64', 'description' => 'signed 64 bits'];
             case 'float':
-                return ['type' => 'number', 'format' => 'float', 'description' => ''];
+                return ['type' => 'number', 'format' => 'float', 'description' => 'float'];
             case 'double':
-                return ['type' => 'number', 'format' => 'double', 'description' => ''];
+                return ['type' => 'number', 'format' => 'double', 'description' => 'double'];
+            case 'decimal':
+                return ['type' => 'number', 'description' => 'decimal'];
             case 'string':
-                return ['type' => 'string', 'description' => ''];
+                return ['type' => 'string', 'description' => 'string'];
             case 'byte':
                 return ['type' => 'string', 'format' => 'byte', 'description' => 'base64 encoded characters'];
             case 'binary':
@@ -499,6 +504,8 @@ class Soap extends BaseRestService
                     'format'      => 'password',
                     'description' => 'Used to hint UIs the input needs to be obscured'
                 ];
+            case 'anyType': // SOAP specific, for now return string
+                return ['type' => 'string', 'description' => 'any type'];
         }
 
         return null;
