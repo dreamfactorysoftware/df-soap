@@ -8,6 +8,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Changed
 
 ### Fixed
+- Fix type support for decimal and anyType.
 
 ## [0.3.1] - 2016-07-08
 ### Added
