@@ -149,7 +149,7 @@ class Soap extends BaseRestService
     protected function preProcess()
     {
         if (!empty($this->resourcePath)) {
-            $path = str_replace('/','.',trim($this->resourcePath, '/'));
+            $path = str_replace('/', '.', trim($this->resourcePath, '/'));
             /** @noinspection PhpUnusedLocalVariableInspection */
             $results = \Event::fire(
                 new ResourcePreProcess($this->name, $path, $this->request)
@@ -167,7 +167,7 @@ class Soap extends BaseRestService
     protected function postProcess()
     {
         if (!empty($this->resourcePath)) {
-            $path = str_replace('/','.',trim($this->resourcePath, '/'));
+            $path = str_replace('/', '.', trim($this->resourcePath, '/'));
             $event =
                 new ResourcePostProcess($this->name, $path, $this->request, $this->response);
             /** @noinspection PhpUnusedLocalVariableInspection */
@@ -243,22 +243,29 @@ class Soap extends BaseRestService
                 (null === $this->types = $this->getFromCache('types')))
         ) {
             $types = $this->client->__getTypes();
+            // first pass, build name-value pairs for easier lookups
             $structures = [];
             foreach ($types as $type) {
                 if (0 === substr_compare($type, 'struct ', 0, 7)) {
                     // declared as "struct type { data_type field; ...}
                     $type = substr($type, 7);
                     $name = strstr($type, ' ', true);
-                    $body = trim(strstr($type, ' '), "{} \t\n\r\0\x0B");
-                    $parameters = [];
-                    foreach (explode(';', $body) as $param) {
-                        // declared as "type data_type"
-                        $parts = explode(' ', trim($param));
-                        if (count($parts) > 1) {
-                            $parameters[trim($parts[1])] = trim($parts[0]);
+                    $type = trim(strstr($type, ' '), "{} \t\n\r\0\x0B");
+                    if (false !== stripos($type, 'complexObjectArray')) {
+                        // declared as "type complexObjectArray"
+                        $type = strstr(trim($type), ' complexObjectArray', true);
+                        $structures[$name] = [$type];
+                    } else {
+                        $parameters = [];
+                        foreach (explode(';', $type) as $param) {
+                            // declared as "type data_type"
+                            $parts = explode(' ', trim($param));
+                            if (count($parts) > 1) {
+                                $parameters[trim($parts[1])] = trim($parts[0]);
+                            }
                         }
+                        $structures[$name] = $parameters;
                     }
-                    $structures[$name] = $parameters;
                 } else {
                     // declared as "type data_type"
                     $parts = explode(' ', $type);
@@ -267,6 +274,42 @@ class Soap extends BaseRestService
                     }
                 }
             }
+            foreach ($structures as $name => &$type) {
+                if (is_array($type)) {
+                    if ((1 === count($type)) && isset($type[0])) {
+                        $type = $type[0];
+                        // array of type
+                        if (array_key_exists($type, $structures)) {
+                            $type = ['type' => 'array', 'items' => ['$ref' => '#/definitions/' . $type]];
+                        } else {
+                            // convert simple types to swagger types
+                            $newType = static::soapType2ApiDocType($type);
+                            $type = ['type' => 'array', 'items' => $newType];
+                        }
+                    } else {
+                        // array of field definitions
+                        foreach ($type as $fieldName => &$fieldType) {
+                            if (array_key_exists($fieldType, $structures)) {
+                                $fieldType = ['$ref' => '#/definitions/' . $fieldType];
+                            } else {
+                                // convert simple types to swagger types
+                                $newType = static::soapType2ApiDocType($fieldType);
+                                $fieldType = $newType;
+                            }
+                        }
+                        $type = ['type' => 'object', 'properties' => $type];
+                    }
+                } else {
+                    if (array_key_exists($type, $structures)) {
+                        $type = ['$ref' => '#/definitions/' . $type];
+                    } else {
+                        // convert simple types to swagger types
+                        $newType = static::soapType2ApiDocType($type);
+                        $type = $newType;
+                    }
+                }
+            }
+
             ksort($structures);
             $this->types = $structures;
             $this->addToCache('types', $this->types, true);
@@ -431,37 +474,7 @@ class Soap extends BaseRestService
             }
         }
 
-        $models = [];
-        $types = $this->getTypes();
-        foreach ($types as $name => $parameters) {
-            if (!isset($models[$name])) {
-                if (is_array($parameters)) {
-                    $properties = [];
-                    foreach ($parameters as $field => $type) {
-                        if (null === $newType = static::soapType2ApiDocType($type)) {
-                            if (array_key_exists($type, $types)) {
-                                if (null === $newType = static::soapType2ApiDocType($types[$type])) {
-                                    $newType = ['$ref' => '#/definitions/'.$type];
-                                } else {
-                                    // check for enumerations
-                                    if (!empty($enums = static::domCheckTypeForEnum($this->dom, $type))) {
-                                        $newType['default'] = '';
-                                        $newType['enum'] = $enums;
-                                    }
-                                }
-                            } else {
-                                \Log::alert("SOAP to Swagger found unknown type: $type");
-                            }
-
-                        }
-                        $properties[$field] = $newType;
-                    }
-                    $temp = static::soapType2ApiDocType($name);
-                    $temp['properties'] = $properties;
-                    $models[$name] = $temp;
-                }
-            }
-        }
+        $models = $this->getTypes();
 
         $base['paths'] = array_merge($base['paths'], $apis);
         $base['definitions'] = array_merge($base['definitions'], $models);
@@ -472,6 +485,7 @@ class Soap extends BaseRestService
     protected static function soapType2ApiDocType($name)
     {
         switch ($name) {
+            case 'int':
             case 'integer':
                 return ['type' => 'number', 'format' => 'int32', 'description' => 'signed 32 bits'];
             case 'long':
@@ -506,9 +520,14 @@ class Soap extends BaseRestService
                 ];
             case 'anyType': // SOAP specific, for now return string
                 return ['type' => 'string', 'description' => 'any type'];
-        }
+            default: // undetermined type, return string for now
+                \Log::alert('SOAP to Swagger type unknown: ' . print_r($name, true));
+                if (!is_string($name)) {
+                    $name = 'object or array';
+                }
 
-        return null;
+                return ['type' => 'string', 'description' => 'undetermined type: ' . $name];
+        }
     }
 
     /**
@@ -520,10 +539,12 @@ class Soap extends BaseRestService
     {
         if (is_object($object)) {
             return array_map([static::class, __FUNCTION__], get_object_vars($object));
-        } else if (is_array($object)) {
-            return array_map([static::class, __FUNCTION__], $object);
         } else {
-            return $object;
+            if (is_array($object)) {
+                return array_map([static::class, __FUNCTION__], $object);
+            } else {
+                return $object;
+            }
         }
     }
 
