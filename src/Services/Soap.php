@@ -539,12 +539,10 @@ class Soap extends BaseRestService
     {
         if (is_object($object)) {
             return array_map([static::class, __FUNCTION__], get_object_vars($object));
+        } elseif (is_array($object)) {
+            return array_map([static::class, __FUNCTION__], $object);
         } else {
-            if (is_array($object)) {
-                return array_map([static::class, __FUNCTION__], $object);
-            } else {
-                return $object;
-            }
+            return $object;
         }
     }
 
