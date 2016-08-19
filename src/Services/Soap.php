@@ -413,11 +413,11 @@ class Soap extends BaseRestService
     /**
      * {@inheritdoc}
      */
-    public function getApiDocInfo()
+    public function buildApiDocInfo()
     {
         $name = strtolower($this->name);
         $capitalized = Inflector::camelize($this->name);
-        $base = parent::getApiDocInfo();
+        $base = parent::getApiDocInfo($this);
 
         $apis = [];
 
@@ -429,10 +429,6 @@ class Soap extends BaseRestService
                         'operationId'       => 'call' . $capitalized . $resource->name,
                         'summary'           => 'call' . $capitalized . $resource->name . '()',
                         'description'       => $resource->description,
-                        'x-publishedEvents' => [
-                            $name . '.' . $resource->name . '.call',
-                            $name . '.function_called',
-                        ],
                         'parameters'        => [
                             [
                                 'name'        => 'body',
