@@ -4,8 +4,6 @@ namespace DreamFactory\Core\Soap\Services;
 use DreamFactory\Core\Components\Cacheable;
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
-use DreamFactory\Core\Events\ResourcePostProcess;
-use DreamFactory\Core\Events\ResourcePreProcess;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
 use DreamFactory\Core\Services\BaseRestService;
@@ -140,40 +138,6 @@ class Soap extends BaseRestService
             }
         } catch (\Exception $ex) {
             throw new InternalServerErrorException("Unexpected SOAP Service Exception:\n{$ex->getMessage()}");
-        }
-    }
-
-    /**
-     * Runs pre process tasks/scripts
-     */
-    protected function preProcess()
-    {
-        if (!empty($this->resourcePath)) {
-            $path = str_replace('/', '.', trim($this->resourcePath, '/'));
-            /** @noinspection PhpUnusedLocalVariableInspection */
-            $results = \Event::fire(
-                new ResourcePreProcess($this->name, $path, $this->request)
-            );
-        } else {
-            parent::preProcess();
-        }
-
-        $this->checkPermission($this->getRequestedAction(), $this->name);
-    }
-
-    /**
-     * Runs post process tasks/scripts
-     */
-    protected function postProcess()
-    {
-        if (!empty($this->resourcePath)) {
-            $path = str_replace('/', '.', trim($this->resourcePath, '/'));
-            $event =
-                new ResourcePostProcess($this->name, $path, $this->request, $this->response);
-            /** @noinspection PhpUnusedLocalVariableInspection */
-            $results = \Event::fire($event);
-        } else {
-            parent::postProcess();
         }
     }
 
@@ -354,6 +318,25 @@ class Soap extends BaseRestService
         return false;
     }
 
+    protected function getEventName()
+    {
+        if (!empty($this->resourcePath)) {
+            return parent::getEventName() . '.' . str_replace('/', '.', trim($this->resourcePath, '/'));
+        }
+
+        return parent::getEventName();
+    }
+
+    /**
+     * Runs pre process tasks/scripts
+     */
+    protected function preProcess()
+    {
+        $this->checkPermission($this->getRequestedAction(), $this->name);
+
+        parent::preProcess();
+    }
+
     /**
      * @param $function
      * @param $payload
@@ -430,11 +413,11 @@ class Soap extends BaseRestService
     /**
      * {@inheritdoc}
      */
-    public function getApiDocInfo()
+    public function buildApiDocInfo()
     {
         $name = strtolower($this->name);
         $capitalized = Inflector::camelize($this->name);
-        $base = parent::getApiDocInfo();
+        $base = parent::getApiDocInfo($this);
 
         $apis = [];
 
@@ -446,10 +429,6 @@ class Soap extends BaseRestService
                         'operationId'       => 'call' . $capitalized . $resource->name,
                         'summary'           => 'call' . $capitalized . $resource->name . '()',
                         'description'       => $resource->description,
-                        'x-publishedEvents' => [
-                            $name . '.' . $resource->name . '.call',
-                            $name . '.function_called',
-                        ],
                         'parameters'        => [
                             [
                                 'name'        => 'body',
