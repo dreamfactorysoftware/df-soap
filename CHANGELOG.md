@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Fixed
 
 
+## [0.4.1] - 2016-08-29
+### Fixed
+- Swagger generation needs identification from service so that SOAP functions are not reused.
+
 ## [0.4.0] - 2016-08-21
 ### Changed
 - General cleanup from declaration changes in df-core for service doc and providers
@@ -55,7 +59,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ## 0.1.0 - 2015-10-24
 First official release working with the new [df-core](https://github.com/dreamfactorysoftware/df-core) library.
 
-[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.4.1...HEAD
+[0.4.1]: https://github.com/dreamfactorysoftware/df-soap/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.3.3...0.4.0
 [0.3.3]: https://github.com/dreamfactorysoftware/df-soap/compare/0.3.2...0.3.3
 [0.3.2]: https://github.com/dreamfactorysoftware/df-soap/compare/0.3.1...0.3.2
