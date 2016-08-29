@@ -25,7 +25,12 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                     'config_handler'  => SoapConfig::class,
                     'default_api_doc' => function ($service) {
                         /** @var \DreamFactory\Core\Models\Service $service */
-                        $soap = new Soap(['config' => $service->getConfigAttribute()]);
+                        $soap = new Soap(
+                            [
+                                'id'     => $service->id,
+                                'name'   => $service->name,
+                                'config' => $service->getConfigAttribute()
+                            ]);
 
                         return $this->buildServiceDoc($service->id, $soap->buildApiDocInfo());
                     },
