@@ -215,9 +215,9 @@ class Soap extends BaseRestService
                     $type = substr($type, 7);
                     $name = strstr($type, ' ', true);
                     $type = trim(strstr($type, ' '), "{} \t\n\r\0\x0B");
-                    if (false !== stripos($type, 'complexObjectArray')) {
+                    if (false !== stripos($type, ' complexObjectArray;')) {
                         // declared as "type complexObjectArray"
-                        $type = strstr(trim($type), ' complexObjectArray', true);
+                        $type = strstr(trim($type), ' complexObjectArray;', true);
                         $structures[$name] = [$type];
                     } else {
                         $parameters = [];
