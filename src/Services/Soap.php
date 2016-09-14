@@ -388,11 +388,7 @@ class Soap extends BaseRestService
     }
 
     /**
-     * @return array
-     * @throws \DreamFactory\Core\Exceptions\BadRequestException
-     * @throws \DreamFactory\Core\Exceptions\InternalServerErrorException
-     * @throws \DreamFactory\Core\Exceptions\NotFoundException
-     * @throws \DreamFactory\Core\Exceptions\RestException
+     * {@inheritdoc}
      */
     protected function handlePost()
     {

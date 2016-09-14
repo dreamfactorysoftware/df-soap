@@ -25,6 +25,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                     'config_handler'  => SoapConfig::class,
                     'default_api_doc' => function ($service) {
                         /** @var \DreamFactory\Core\Models\Service $service */
+                        $service->protectedView = false;
                         $soap = new Soap(
                             [
                                 'id'     => $service->id,

@@ -13,13 +13,11 @@ class SoapConfig extends BaseServiceConfigModel
     protected $casts = ['options' => 'array', 'headers' => 'array'];
 
     /**
-     * @param int $id
-     *
-     * @return array
+     * {@inheritdoc}
      */
-    public static function getConfig($id)
+    public static function getConfig($id, $protect = true)
     {
-        $config = parent::getConfig($id);
+        $config = parent::getConfig($id, $protect);
 
         $cacheConfig = ServiceCacheConfig::whereServiceId($id)->first();
         $config['cache_enabled'] = (empty($cacheConfig)) ? false : $cacheConfig->getAttribute('cache_enabled');
