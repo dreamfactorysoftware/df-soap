@@ -388,11 +388,7 @@ class Soap extends BaseRestService
     }
 
     /**
-     * @return array
-     * @throws \DreamFactory\Core\Exceptions\BadRequestException
-     * @throws \DreamFactory\Core\Exceptions\InternalServerErrorException
-     * @throws \DreamFactory\Core\Exceptions\NotFoundException
-     * @throws \DreamFactory\Core\Exceptions\RestException
+     * {@inheritdoc}
      */
     protected function handlePost()
     {
@@ -425,11 +421,11 @@ class Soap extends BaseRestService
             if (!empty($access = $this->getPermissions($resource->name))) {
                 $apis['/' . $name . '/' . $resource->name] = [
                     'post' => [
-                        'tags'              => [$name],
-                        'operationId'       => 'call' . $capitalized . $resource->name,
-                        'summary'           => 'call' . $capitalized . $resource->name . '()',
-                        'description'       => $resource->description,
-                        'parameters'        => [
+                        'tags'        => [$name],
+                        'operationId' => 'call' . $capitalized . $resource->name,
+                        'summary'     => 'call' . $capitalized . $resource->name . '()',
+                        'description' => $resource->description,
+                        'parameters'  => [
                             [
                                 'name'        => 'body',
                                 'description' => 'Data containing name-value pairs of fields to send.',
@@ -438,7 +434,7 @@ class Soap extends BaseRestService
                                 'required'    => true,
                             ],
                         ],
-                        'responses'         => [
+                        'responses'   => [
                             '200'     => [
                                 'description' => 'Success',
                                 'schema'      => ['$ref' => '#/definitions/' . $resource->responseType]
@@ -464,11 +460,27 @@ class Soap extends BaseRestService
     protected static function soapType2ApiDocType($name)
     {
         switch ($name) {
+            case 'byte':
+                return ['type' => 'number', 'format' => 'int8', 'description' => 'signed 8-bit integer'];
+            case 'unsignedByte':
+                return ['type' => 'number', 'format' => 'int8', 'description' => 'unsigned 8-bit integer'];
+            case 'short':
+                return ['type' => 'number', 'format' => 'int16', 'description' => 'signed 16-bit integer'];
+            case 'unsignedShort':
+                return ['type' => 'number', 'format' => 'int8', 'description' => 'unsigned 16-bit integer'];
             case 'int':
             case 'integer':
-                return ['type' => 'number', 'format' => 'int32', 'description' => 'signed 32 bits'];
+            case 'negativeInteger':    // An integer containing only negative values (..,-2,-1)
+            case 'nonNegativeInteger': // An integer containing only non-negative values (0,1,2,..)
+            case 'nonPositiveInteger':    // An integer containing only non-positive values (..,-2,-1,0)
+            case 'positiveInteger': // An integer containing only positive values (1,2,..)
+                return ['type' => 'number', 'format' => 'int32', 'description' => 'signed 32-bit integer'];
+            case 'unsignedInt':
+                return ['type' => 'number', 'format' => 'int32', 'description' => 'unsigned 32-bit integer'];
             case 'long':
-                return ['type' => 'number', 'format' => 'int64', 'description' => 'signed 64 bits'];
+                return ['type' => 'number', 'format' => 'int64', 'description' => 'signed 64-bit integer'];
+            case 'unsignedLong':
+                return ['type' => 'number', 'format' => 'int8', 'description' => 'unsigned 64-bit integer'];
             case 'float':
                 return ['type' => 'number', 'format' => 'float', 'description' => 'float'];
             case 'double':
@@ -477,19 +489,30 @@ class Soap extends BaseRestService
                 return ['type' => 'number', 'description' => 'decimal'];
             case 'string':
                 return ['type' => 'string', 'description' => 'string'];
-            case 'byte':
-                return ['type' => 'string', 'format' => 'byte', 'description' => 'base64 encoded characters'];
+            case 'anyURI':
+                return ['type' => 'string', 'format' => 'uri', 'description' => 'any valid URI'];
+            case 'base64Binary':
+                return ['type' => 'string', 'format' => 'byte', 'description' => 'Base64-encoded characters'];
+            case 'hexBinary':
+                return ['type' => 'string', 'format' => 'binary', 'description' => 'hexadecimal-encoded characters'];
             case 'binary':
                 return ['type' => 'string', 'format' => 'binary', 'description' => 'any sequence of octets'];
             case 'boolean':
                 return ['type' => 'boolean', 'description' => 'true or false'];
             case 'date':
                 return ['type' => 'string', 'format' => 'date', 'description' => 'As defined by full-date - RFC3339'];
+            case 'time':
+                return ['type' => 'string', 'description' => 'As defined by time - RFC3339'];
             case 'dateTime':
                 return [
                     'type'        => 'string',
                     'format'      => 'date-time',
                     'description' => 'As defined by date-time - RFC3339'
+                ];
+            case 'duration':
+                return [
+                    'type'        => 'string',
+                    'description' => 'Duration or time interval as specified in the following form "PnYnMnDTnHnMnS".'
                 ];
             case 'password':
                 return [
