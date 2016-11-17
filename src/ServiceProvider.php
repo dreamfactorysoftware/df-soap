@@ -24,16 +24,21 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                     'group'           => ServiceTypeGroups::REMOTE,
                     'config_handler'  => SoapConfig::class,
                     'default_api_doc' => function ($service) {
-                        /** @var \DreamFactory\Core\Models\Service $service */
-                        $service->protectedView = false;
-                        $soap = new Soap(
-                            [
-                                'id'     => $service->id,
-                                'name'   => $service->name,
-                                'config' => $service->getConfigAttribute()
-                            ]);
+                        try {
+                            /** @var \DreamFactory\Core\Models\Service $service */
+                            $service->protectedView = false;
+                            $soap = new Soap(
+                                [
+                                    'id'     => $service->id,
+                                    'name'   => $service->name,
+                                    'config' => $service->getConfigAttribute()
+                                ]);
 
-                        return $this->buildServiceDoc($service->id, $soap->buildApiDocInfo());
+                            return $this->buildServiceDoc($service->id, $soap->buildApiDocInfo());
+                        } catch (\Exception $ex) {
+                            \Log::error('Failed to get API Doc from service: ' . $ex->getMessage());
+                            return [];
+                        }
                     },
                     'factory'         => function ($config) {
                         return new Soap($config);
