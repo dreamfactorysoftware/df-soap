@@ -4,10 +4,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 ### Added
-
 ### Changed
-
 ### Fixed
+
+## [0.7.0] - 2017-01-16
+### Changed
+- Load WSDL from storage directory if only file name given
 
 ## [0.6.0] - 2016-11-17
 ### Fixed
@@ -19,11 +21,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [0.4.2] - 2016-09-08
 ### Fixed
-- Swagger generation from complexObjectArray type string search issue.
+- Swagger generation from complexObjectArray type string search issue
 
 ## [0.4.1] - 2016-08-29
 ### Fixed
-- Swagger generation needs identification from service so that SOAP functions are not reused.
+- Swagger generation needs identification from service so that SOAP functions are not reused
 
 ## [0.4.0] - 2016-08-21
 ### Changed
@@ -31,16 +33,16 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [0.3.3] - 2016-07-28
 ### Fixed
-- Improved conversion of SOAP types to Swagger definitions.
+- Improved conversion of SOAP types to Swagger definitions
 
 ## [0.3.2] - 2016-07-20
 ### Fixed
-- Fix type support for decimal and anyType.
+- Fix type support for decimal and anyType
 
 ## [0.3.1] - 2016-07-08
 ### Added
-- DF-674 Swagger model generation corrected, now supports wsdl enumerations in types.
-- DF-775 Adding event support for SOAP methods.
+- DF-674 Swagger model generation corrected, now supports wsdl enumerations in types
+- DF-775 Adding event support for SOAP methods
 
 ### Fixed
 - SoapFault::faultcode not being passed thru in REST response
@@ -70,7 +72,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ## 0.1.0 - 2015-10-24
 First official release working with the new [df-core](https://github.com/dreamfactorysoftware/df-core) library.
 
-[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.6.0...HEAD
+[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.7.0...HEAD
+[0.7.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.4.2...0.5.0
 [0.4.2]: https://github.com/dreamfactorysoftware/df-soap/compare/0.4.1...0.4.2
