@@ -75,6 +75,15 @@ class Soap extends BaseRestService
             if (!isset($config['options']['location']) || !isset($config['options']['uri'])) {
                 throw new \InvalidArgumentException('SOAP Services require either a WSDL or both location and URI to be configured.');
             }
+        } else {
+            if (false === strpos($this->wsdl, DIRECTORY_SEPARATOR)) {
+                // no directories involved, store it where we want to store it
+                if (!empty($storage = storage_path('wsdl'))) {
+                    $this->wsdl = rtrim($storage, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $this->wsdl;
+                }
+            } elseif (false !== $path = realpath($this->wsdl)) {
+                $this->wsdl = $path;
+            }
         }
         $options = array_get($config, 'options', []);
         if (!is_array($options)) {
