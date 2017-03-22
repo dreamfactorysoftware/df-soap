@@ -12,6 +12,7 @@ use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Library\Utility\Inflector;
 use DreamFactory\Library\Utility\Scalar;
+use Log;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -346,6 +347,49 @@ class Soap extends BaseRestService
         parent::preProcess();
     }
 
+    protected function formatPayload(&$payload)
+    {
+        if (!is_array($payload)) {
+            return;
+        }
+        foreach ($payload as $key => &$value) {
+            if (is_array($value)) {
+                if (0 === strcasecmp('soapvar', $key)) {
+                    $data = array_get($value, 'data');
+                    if ($encoding = array_get($value, 'encoding')) {
+                        // see if there is a constant usage
+                        if (!is_numeric($encoding)) {
+                            if (defined($encoding)) {
+                                $encoding = constant($encoding);
+                            }
+                        }
+                    } else {
+                        // attempt to determine it
+                        switch (gettype($data)) {
+                            case 'array': $encoding = SOAP_ENC_ARRAY; break;
+                            case 'object': $encoding = SOAP_ENC_OBJECT; break;
+                            case 'boolean': $encoding = XSD_BOOLEAN; break;
+                            case 'double': $encoding = XSD_DOUBLE; break;
+                            case 'integer': $encoding = XSD_INTEGER; break;
+                            case 'string': $encoding = XSD_STRING; break;
+                        }
+                    }
+
+                    $payload = new \SoapVar(
+                        $data,
+                        $encoding,
+                        array_get($value, 'type_name'),
+                        array_get($value, 'type_namespace'),
+                        array_get($value, 'node_name'),
+                        array_get($value, 'node_namespace')
+                    );
+                } else {
+                    $this->formatPayload($value);
+                }
+            }
+        }
+    }
+
     /**
      * @param $function
      * @param $payload
@@ -360,15 +404,39 @@ class Soap extends BaseRestService
             throw new NotFoundException("Function '$function' does not exist on this service.");
         }
 
+        if (is_array($payload)) {
+            $this->formatPayload($payload);
+        }
         try {
             $result = $this->client->$function($payload);
             $result = static::object2Array($result);
 
+            // debugging help
+            if ($last = $this->client->__getLastRequest()) {
+                Log::debug($this->name . ' last SOAP request: ' . $last);
+            }
+            if ($lastHeaders = $this->client->__getLastRequestHeaders()) {
+                Log::debug($this->name . ' last SOAP request headers: ' . $lastHeaders);
+            }
+            if ($last = $this->client->__getLastResponse()) {
+                Log::debug($this->name . ' last SOAP response: ' . $last);
+            }
+            if ($lastHeaders = $this->client->__getLastResponseHeaders()) {
+                Log::debug($this->name . ' last SOAP response headers: ' . $lastHeaders);
+            }
+
             return $result;
         } catch (\SoapFault $e) {
+            // debugging help
+            if ($last = $this->client->__getLastRequest()) {
+                Log::debug($this->name . ' failed SOAP request: ' . $last);
+            }
+            if ($lastHeaders = $this->client->__getLastRequestHeaders()) {
+                Log::debug($this->name . ' failed SOAP request headers: ' . $lastHeaders);
+            }
+
             /** @noinspection PhpUndefinedFieldInspection */
             $faultCode = (property_exists($e, 'faultcode') ? $e->faultcode : $e->getCode());
-
             $errorCode = Response::HTTP_INTERNAL_SERVER_ERROR;
             // Fault code can be a string.
             if (is_numeric($faultCode) && strpos($faultCode, '.') === false) {
