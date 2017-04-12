@@ -77,7 +77,7 @@ class Soap extends BaseRestService
                 throw new \InvalidArgumentException('SOAP Services require either a WSDL or both location and URI to be configured.');
             }
         } else {
-            if (false === strpos($this->wsdl, DIRECTORY_SEPARATOR)) {
+            if ((false === strpos($this->wsdl, '/')) && (false === strpos($this->wsdl, '\\'))) {
                 // no directories involved, store it where we want to store it
                 if (!empty($storage = storage_path('wsdl'))) {
                     $this->wsdl = rtrim($storage, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $this->wsdl;
@@ -104,7 +104,7 @@ class Soap extends BaseRestService
         $this->cachePrefix = 'service_' . $this->id . ':';
 
         try {
-            $this->client = @new \SoapClient($this->wsdl, $options);
+            $this->client = new \SoapClient($this->wsdl, $options);
             $this->dom = new \DOMDocument();
             if (!empty($this->wsdl)) {
                 $this->dom->load($this->wsdl);
@@ -366,12 +366,24 @@ class Soap extends BaseRestService
                     } else {
                         // attempt to determine it
                         switch (gettype($data)) {
-                            case 'array': $encoding = SOAP_ENC_ARRAY; break;
-                            case 'object': $encoding = SOAP_ENC_OBJECT; break;
-                            case 'boolean': $encoding = XSD_BOOLEAN; break;
-                            case 'double': $encoding = XSD_DOUBLE; break;
-                            case 'integer': $encoding = XSD_INTEGER; break;
-                            case 'string': $encoding = XSD_STRING; break;
+                            case 'array':
+                                $encoding = SOAP_ENC_ARRAY;
+                                break;
+                            case 'object':
+                                $encoding = SOAP_ENC_OBJECT;
+                                break;
+                            case 'boolean':
+                                $encoding = XSD_BOOLEAN;
+                                break;
+                            case 'double':
+                                $encoding = XSD_DOUBLE;
+                                break;
+                            case 'integer':
+                                $encoding = XSD_INTEGER;
+                                break;
+                            case 'string':
+                                $encoding = XSD_STRING;
+                                break;
                         }
                     }
 

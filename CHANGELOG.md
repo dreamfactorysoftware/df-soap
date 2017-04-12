@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Changed
 ### Fixed
 
+## [0.8.2] - 2017-04-12
+### Fixed
+- Windows directory check for SOAP WSDL path
+
 ## [0.8.1] - 2017-03-22
 ### Added
 - Added the ability to send data that will utilize a SoapVar class to send non-WSDL specified payloads
@@ -79,7 +83,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ## 0.1.0 - 2015-10-24
 First official release working with the new [df-core](https://github.com/dreamfactorysoftware/df-core) library.
 
-[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.8.1...HEAD
+[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.8.2...HEAD
+[0.8.2]: https://github.com/dreamfactorysoftware/df-soap/compare/0.8.1...0.8.2
 [0.8.1]: https://github.com/dreamfactorysoftware/df-soap/compare/0.8.0...0.8.1
 [0.8.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.6.0...0.7.0
