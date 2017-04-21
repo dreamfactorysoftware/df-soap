@@ -1,71 +1,18 @@
 <?php
 namespace DreamFactory\Core\Soap\Models;
 
+use DreamFactory\Core\Components\SupportsCache;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
-use DreamFactory\Core\Models\ServiceCacheConfig;
 
 class SoapConfig extends BaseServiceConfigModel
 {
+    use SupportsCache;
+
     protected $table = 'soap_config';
 
     protected $fillable = ['service_id', 'wsdl', 'options', 'headers'];
 
     protected $casts = ['options' => 'array', 'headers' => 'array'];
-
-    /**
-     * {@inheritdoc}
-     */
-    public static function getConfig($id, $protect = true)
-    {
-        $config = parent::getConfig($id, $protect);
-
-        $cacheConfig = ServiceCacheConfig::whereServiceId($id)->first();
-        $config['cache_enabled'] = (empty($cacheConfig)) ? false : $cacheConfig->getAttribute('cache_enabled');
-        $config['cache_ttl'] = (empty($cacheConfig)) ? 0 : $cacheConfig->getAttribute('cache_ttl');
-
-        return $config;
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public static function validateConfig($config, $create = true)
-    {
-
-        return true;
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public static function setConfig($id, $config)
-    {
-        $cache = [];
-        if (isset($config['cache_enabled'])) {
-            $cache['cache_enabled'] = $config['cache_enabled'];
-            unset($config['cache_enabled']);
-        }
-        if (isset($config['cache_ttl'])) {
-            $cache['cache_ttl'] = $config['cache_ttl'];
-            unset($config['cache_ttl']);
-        }
-        if (!empty($cache)) {
-            ServiceCacheConfig::setConfig($id, $cache);
-        }
-
-        parent::setConfig($id, $config);
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public static function getConfigSchema()
-    {
-        $schema = parent::getConfigSchema();
-        $schema = array_merge($schema, ServiceCacheConfig::getConfigSchema());
-
-        return $schema;
-    }
 
     /**
      * @param array $schema
