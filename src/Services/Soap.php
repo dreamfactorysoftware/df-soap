@@ -10,8 +10,6 @@ use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
-use DreamFactory\Library\Utility\Inflector;
-use DreamFactory\Library\Utility\Scalar;
 use Log;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -99,7 +97,7 @@ class Soap extends BaseRestService
             }
         }
 
-        $this->cacheEnabled = Scalar::boolval(array_get($config, 'cache_enabled'));
+        $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
         $this->cacheTTL = intval(array_get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
         $this->cachePrefix = 'service_' . $this->id . ':';
 
@@ -501,7 +499,7 @@ class Soap extends BaseRestService
     public function buildApiDocInfo()
     {
         $name = strtolower($this->name);
-        $capitalized = Inflector::camelize($this->name);
+        $capitalized = camelize($this->name);
         $base = parent::getApiDocInfo($this);
 
         $apis = [];
