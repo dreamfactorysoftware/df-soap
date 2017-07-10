@@ -3,6 +3,8 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
+### Added
+- DF-1061 Support for stream_context containing an array or json object string of options, like ssl.
 
 ## [0.10.0] - 2017-06-05
 ### Changed
