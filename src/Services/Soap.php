@@ -90,8 +90,20 @@ class Soap extends BaseRestService
         } else {
             foreach ($options as $key => $value) {
                 if (!is_numeric($value)) {
-                    if (defined($value)) {
+                    if (is_string($value) && defined($value)) {
                         $options[$key] = constant($value);
+                    }
+                    if (0 === strcasecmp($key, 'stream_context')) {
+                        // Need to make a stream context out of an array of options
+                        if (is_string($value)) {
+                            // try to convert json to array
+                            $value = json_decode(stripslashes($value), true);
+                        }
+                        if (!is_array($value)) {
+                            throw new \InvalidArgumentException('SOAP Services stream_context must be a valid array (or JSON object) of parameters.');
+                        }
+                        $context = stream_context_create($value);
+                        $options[$key] = $context;
                     }
                 }
             }

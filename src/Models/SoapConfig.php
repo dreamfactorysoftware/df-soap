@@ -1,4 +1,5 @@
 <?php
+
 namespace DreamFactory\Core\Soap\Models;
 
 use DreamFactory\Core\Components\SupportsCache;
@@ -37,7 +38,8 @@ class SoapConfig extends BaseServiceConfigModel
                     ];
                 $schema['description'] =
                     'An array of options for the connection.' .
-                    ' For further options, see http://php.net/manual/en/soapclient.soapclient.php.';
+                    ' For further options, see http://php.net/manual/en/soapclient.soapclient.php.' .
+                    ' For stream_context options, provide a JSON object string with the various options for the value.';
                 break;
             case 'headers':
                 $schema['type'] = 'array';
