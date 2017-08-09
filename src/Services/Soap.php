@@ -1,4 +1,5 @@
 <?php
+
 namespace DreamFactory\Core\Soap\Services;
 
 use DreamFactory\Core\Components\Cacheable;
@@ -517,35 +518,33 @@ class Soap extends BaseRestService
         $apis = [];
 
         foreach ($this->getFunctions() as $resource) {
-            if (!empty($access = $this->getPermissions($resource->name))) {
-                $apis['/' . $name . '/' . $resource->name] = [
-                    'post' => [
-                        'tags'        => [$name],
-                        'operationId' => 'call' . $capitalized . $resource->name,
-                        'summary'     => 'call' . $capitalized . $resource->name . '()',
-                        'description' => $resource->description,
-                        'parameters'  => [
-                            [
-                                'name'        => 'body',
-                                'description' => 'Data containing name-value pairs of fields to send.',
-                                'schema'      => ['$ref' => '#/definitions/' . $resource->requestType],
-                                'in'          => 'body',
-                                'required'    => true,
-                            ],
-                        ],
-                        'responses'   => [
-                            '200'     => [
-                                'description' => 'Success',
-                                'schema'      => ['$ref' => '#/definitions/' . $resource->responseType]
-                            ],
-                            'default' => [
-                                'description' => 'Error',
-                                'schema'      => ['$ref' => '#/definitions/Error']
-                            ]
+            $apis['/' . $name . '/' . $resource->name] = [
+                'post' => [
+                    'tags'        => [$name],
+                    'operationId' => 'call' . $capitalized . $resource->name,
+                    'summary'     => 'call' . $capitalized . $resource->name . '()',
+                    'description' => $resource->description,
+                    'parameters'  => [
+                        [
+                            'name'        => 'body',
+                            'description' => 'Data containing name-value pairs of fields to send.',
+                            'schema'      => ['$ref' => '#/definitions/' . $resource->requestType],
+                            'in'          => 'body',
+                            'required'    => true,
                         ],
                     ],
-                ];
-            }
+                    'responses'   => [
+                        '200'     => [
+                            'description' => 'Success',
+                            'schema'      => ['$ref' => '#/definitions/' . $resource->responseType]
+                        ],
+                        'default' => [
+                            'description' => 'Error',
+                            'schema'      => ['$ref' => '#/definitions/Error']
+                        ]
+                    ],
+                ],
+            ];
         }
 
         $models = $this->getTypes();
