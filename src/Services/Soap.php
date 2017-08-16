@@ -112,7 +112,6 @@ class Soap extends BaseRestService
 
         $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
         $this->cacheTTL = intval(array_get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
-        $this->cachePrefix = 'service_' . $this->id . ':';
 
         try {
             $this->client = new \SoapClient($this->wsdl, $options);
