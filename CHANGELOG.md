@@ -4,6 +4,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.1] - 2017-09-21
+### Fixed
+- Fix API docs building
+
 ## [0.12.0] - 2017-08-17
 ### Changed
 - Reworked API doc usage and generation
@@ -97,7 +101,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ## 0.1.0 - 2015-10-24
 First official release working with the new [df-core](https://github.com/dreamfactorysoftware/df-core) library.
 
-[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.12.0...HEAD
+[Unreleased]: https://github.com/dreamfactorysoftware/df-soap/compare/0.12.1...HEAD
+[0.12.1]: https://github.com/dreamfactorysoftware/df-soap/compare/0.12.0...0.12.1
 [0.12.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/dreamfactorysoftware/df-soap/compare/0.9.0...0.10.0
