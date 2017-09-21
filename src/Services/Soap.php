@@ -508,7 +508,7 @@ class Soap extends BaseRestService
     /**
      * {@inheritdoc}
      */
-    public function buildApiDocInfo()
+    public function getApiDoc()
     {
         $name = strtolower($this->name);
         $capitalized = camelize($this->name);
