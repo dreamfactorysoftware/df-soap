@@ -264,7 +264,7 @@ class Soap extends BaseRestService
                         $type = $type[0];
                         // array of type
                         if (array_key_exists($type, $structures)) {
-                            $type = ['type' => 'array', 'items' => ['$ref' => '#/definitions/' . $type]];
+                            $type = ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/' . $type]];
                         } else {
                             // convert simple types to swagger types
                             $newType = static::soapType2ApiDocType($type);
@@ -274,7 +274,7 @@ class Soap extends BaseRestService
                         // array of field definitions
                         foreach ($type as $fieldName => &$fieldType) {
                             if (array_key_exists($fieldType, $structures)) {
-                                $fieldType = ['$ref' => '#/definitions/' . $fieldType];
+                                $fieldType = ['$ref' => '#/components/schemas/' . $fieldType];
                             } else {
                                 // convert simple types to swagger types
                                 $newType = static::soapType2ApiDocType($fieldType);
@@ -285,7 +285,7 @@ class Soap extends BaseRestService
                     }
                 } else {
                     if (array_key_exists($type, $structures)) {
-                        $type = ['$ref' => '#/definitions/' . $type];
+                        $type = ['$ref' => '#/components/schemas/' . $type];
                     } else {
                         // convert simple types to swagger types
                         $newType = static::soapType2ApiDocType($type);
@@ -508,50 +508,154 @@ class Soap extends BaseRestService
     /**
      * {@inheritdoc}
      */
-    public function getApiDoc()
+    protected function getApiDocPaths()
     {
-        $name = strtolower($this->name);
         $capitalized = camelize($this->name);
-        $base = parent::getApiDocInfo($this);
 
-        $apis = [];
-
-        foreach ($this->getFunctions() as $resource) {
-            $apis['/' . $name . '/' . $resource->name] = [
-                'post' => [
-                    'tags'        => [$name],
-                    'operationId' => 'call' . $capitalized . $resource->name,
-                    'summary'     => 'call' . $capitalized . $resource->name . '()',
-                    'description' => $resource->description,
+        $paths = [
+            '/' => [
+                'get' => [
+                    'summary'     => 'get' . $capitalized . 'Resources() - Get resources for this service.',
+                    'operationId' => 'get' . $capitalized . 'Resources',
+                    'description' => 'Return an array of the resources available.',
                     'parameters'  => [
-                        [
-                            'name'        => 'body',
-                            'description' => 'Data containing name-value pairs of fields to send.',
-                            'schema'      => ['$ref' => '#/definitions/' . $resource->requestType],
-                            'in'          => 'body',
-                            'required'    => true,
-                        ],
+                        ApiOptions::documentOption(ApiOptions::AS_LIST),
+                        ApiOptions::documentOption(ApiOptions::AS_ACCESS_LIST),
+                        ApiOptions::documentOption(ApiOptions::INCLUDE_ACCESS),
+                        ApiOptions::documentOption(ApiOptions::REFRESH),
                     ],
                     'responses'   => [
-                        '200'     => [
-                            'description' => 'Success',
-                            'schema'      => ['$ref' => '#/definitions/' . $resource->responseType]
-                        ],
-                        'default' => [
-                            'description' => 'Error',
-                            'schema'      => ['$ref' => '#/definitions/Error']
-                        ]
+                        '200' => ['$ref' => '#/components/responses/SoapResponse']
+                    ],
+                ],
+            ],
+        ];
+        foreach ($this->getFunctions() as $resource) {
+            $paths['/' . $resource->name] = [
+                'post' => [
+                    'operationId' => 'call' . $capitalized . $resource->name,
+                    'summary'     => 'call' . $capitalized . $resource->name . '()',
+                    'description' => is_null($resource->description) ? '' : $resource->description,
+                    'requestBody' => [
+                        '$ref' => '#/components/requestBodies/' . $resource->requestType
+                    ],
+                    'responses'   => [
+                        '200' => ['$ref' => '#/components/responses/' . $resource->responseType]
                     ],
                 ],
             ];
         }
 
-        $models = $this->getTypes();
+        return $paths;
+    }
 
-        $base['paths'] = array_merge($base['paths'], $apis);
-        $base['definitions'] = array_merge($base['definitions'], $models);
+    protected function getApiDocRequests()
+    {
+        $requests = [];
+        foreach ($this->getFunctions() as $resource) {
+            $requests[$resource->requestType] = [
+                'description' => $resource->requestType . ' Request',
+                'content'     => [
+                    'application/json' => [
+                        'schema' => ['$ref' => '#/components/schemas/' . $resource->requestType]
+                    ],
+                    'application/xml'  => [
+                        'schema' => ['$ref' => '#/components/schemas/' . $resource->requestType]
+                    ],
+                ],
+            ];
+        }
 
-        return $base;
+        return $requests;
+    }
+
+    protected function getApiDocResponses()
+    {
+        $responses = [
+            'SoapResponse' => [
+                'description' => 'SOAP Response',
+                'content'     => [
+                    'application/json' => [
+                        'schema' => ['$ref' => '#/components/schemas/SoapResponse']
+                    ],
+                    'application/xml'  => [
+                        'schema' => ['$ref' => '#/components/schemas/SoapResponse']
+                    ],
+                ],
+            ],
+        ];
+
+        foreach ($this->getFunctions() as $resource) {
+            $responses[$resource->responseType] = [
+                'description' => $resource->responseType . ' Response',
+                'content'     => [
+                    'application/json' => [
+                        'schema' => ['$ref' => '#/components/schemas/' . $resource->responseType]
+                    ],
+                    'application/xml'  => [
+                        'schema' => ['$ref' => '#/components/schemas/' . $resource->responseType]
+                    ],
+                ],
+            ];
+        }
+
+        return $responses;
+    }
+
+    protected function getApiDocSchemas()
+    {
+        $wrapper = ResourcesWrapper::getWrapper();
+
+        $models = [
+            'SoapResponse' => [
+                'type'       => 'object',
+                'properties' => [
+                    $wrapper => [
+                        'type'        => 'array',
+                        'description' => 'Array of system records.',
+                        'items'       => [
+                            '$ref' => '#/components/schemas/SoapMethods',
+                        ],
+                    ],
+                ],
+            ],
+            'SoapMethods'  => [
+                'type'       => 'object',
+                'properties' => [
+                    'name'           => [
+                        'type'        => 'string',
+                        'description' => 'A URL to the target host.',
+                    ],
+                    'description'    => [
+                        'type'        => 'string',
+                        'description' => 'An optional string describing the host designated by the URL.',
+                    ],
+                    'requestType'    => [
+                        'type'        => 'string',
+                        'description' => 'An optional string describing the host designated by the URL.',
+                    ],
+                    'requestFields'  => [
+                        'type'        => 'object',
+                        'description' => 'An optional string describing the host designated by the URL.',
+                    ],
+                    'responseType'   => [
+                        'type'        => 'string',
+                        'description' => 'An optional string describing the host designated by the URL.',
+                    ],
+                    'responseFields' => [
+                        'type'        => 'object',
+                        'description' => 'An optional string describing the host designated by the URL.',
+                    ],
+                    'access'         => [
+                        'type'        => 'array',
+                        'items'       => ['type' => 'string'],
+                        'description' => 'An array of verbs allowed.',
+                    ],
+                ],
+            ],
+        ];
+
+        return array_merge($models, $this->getTypes());
     }
 
     protected static function soapType2ApiDocType($name)
