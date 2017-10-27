@@ -13,6 +13,7 @@ use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use Log;
 use Symfony\Component\HttpFoundation\Response;
+use DreamFactory\Core\Soap\Components\SoapClient;
 
 /**
  * Class Soap
@@ -32,7 +33,7 @@ class Soap extends BaseRestService
      */
     protected $wsdl;
     /**
-     * @var \SoapClient
+     * @var SoapClient
      */
     protected $client;
     /**
@@ -114,12 +115,12 @@ class Soap extends BaseRestService
         $this->cacheTTL = intval(array_get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
 
         try {
-            $this->client = new \SoapClient($this->wsdl, $options);
-            $this->dom = new \DOMDocument();
-            if (!empty($this->wsdl)) {
-                $this->dom->load($this->wsdl);
-                $this->dom->preserveWhiteSpace = false;
-            }
+            $this->client = new SoapClient($this->wsdl, $options);
+//            $this->dom = new \DOMDocument();
+//            if (!empty($this->wsdl)) {
+//                $this->dom->load($this->wsdl);
+//                $this->dom->preserveWhiteSpace = false;
+//            }
 
             $headers = array_get($config, 'headers');
             $soapHeaders = null;
