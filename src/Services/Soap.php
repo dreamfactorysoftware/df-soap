@@ -516,7 +516,7 @@ class Soap extends BaseRestService
         $paths = [
             '/' => [
                 'get' => [
-                    'summary'     => 'get' . $capitalized . 'Resources() - Get resources for this service.',
+                    'summary'     => 'Get resources for this service.',
                     'operationId' => 'get' . $capitalized . 'Resources',
                     'description' => 'Return an array of the resources available.',
                     'parameters'  => [
@@ -534,9 +534,9 @@ class Soap extends BaseRestService
         foreach ($this->getFunctions() as $resource) {
             $paths['/' . $resource->name] = [
                 'post' => [
-                    'operationId' => 'call' . $capitalized . $resource->name,
-                    'summary'     => 'call' . $capitalized . $resource->name . '()',
+                    'summary'     => 'call the ' . $resource->name . ' operation.',
                     'description' => is_null($resource->description) ? '' : $resource->description,
+                    'operationId' => 'call' . $capitalized . $resource->name,
                     'requestBody' => [
                         '$ref' => '#/components/requestBodies/' . $resource->requestType
                     ],
