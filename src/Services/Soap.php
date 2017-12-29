@@ -162,15 +162,8 @@ class Soap extends BaseRestService
         }
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    public function getResources($only_handlers = false)
+    public function getResources()
     {
-        if ($only_handlers) {
-            return [];
-        }
-
         $refresh = $this->request->getParameterAsBool(ApiOptions::REFRESH);
         $result = $this->getFunctions($refresh);
         $resources = [];
