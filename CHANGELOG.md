@@ -3,6 +3,8 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
+- Add support for anySimpleType and others
+
 ## [0.14.0] - 2017-12-28
 - DF-1150 Update copyright and support email
 - Added package discovery
