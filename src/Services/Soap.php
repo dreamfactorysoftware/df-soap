@@ -684,8 +684,6 @@ class Soap extends BaseRestService
                 return ['type' => 'number', 'description' => 'decimal'];
             case 'string':
                 return ['type' => 'string', 'description' => 'string'];
-            case 'anyURI':
-                return ['type' => 'string', 'format' => 'uri', 'description' => 'any valid URI'];
             case 'base64Binary':
                 return ['type' => 'string', 'format' => 'byte', 'description' => 'Base64-encoded characters'];
             case 'hexBinary':
@@ -704,6 +702,16 @@ class Soap extends BaseRestService
                     'format'      => 'date-time',
                     'description' => 'As defined by date-time - RFC3339'
                 ];
+            case 'gYearMonth':
+            case 'gYear':
+            case 'gMonthDay':
+            case 'gDay':
+            case 'gMonth':
+                return [
+                    'type'        => 'string',
+                    'format'      => 'date-time',
+                    'description' => 'As defined by date-time - RFC3339'
+                ];
             case 'duration':
                 return [
                     'type'        => 'string',
@@ -715,8 +723,31 @@ class Soap extends BaseRestService
                     'format'      => 'password',
                     'description' => 'Used to hint UIs the input needs to be obscured'
                 ];
-            case 'anyType': // SOAP specific, for now return string
-                return ['type' => 'string', 'description' => 'any type'];
+            case 'anySimpleType': // SOAP specific, use swagger's Any Type {} or no type
+                return ['description' => 'any simple type'];
+            case 'anyType': // SOAP specific, use swagger's Any Type {} or no type
+                return ['description' => 'any type'];
+            case 'anyURI':
+                return ['type' => 'string', 'format' => 'uri', 'description' => 'any valid URI'];
+            case 'anyXML': // SOAP specific, use swagger's Any Type {} or no type
+            case '<anyXML>': // SOAP specific, use swagger's Any Type {} or no type
+                return ['description' => 'any XML'];
+            // derived string types
+            case 'QName':
+            case 'NOTATION':
+            case 'normalizedString':
+            case 'token':
+            case 'language':
+            case 'ID':
+            case 'IDREF':
+            case 'IDREFS':
+            case 'ENTITY':
+            case 'ENTITIES':
+            case 'NMTOKEN':
+            case 'NMTOKENS':
+            case 'Name':
+            case 'NCName':
+                return ['type' => 'string', 'description' => 'derived string type: ' . $name];
             default: // undetermined type, return string for now
                 \Log::alert('SOAP to Swagger type unknown: ' . print_r($name, true));
                 if (!is_string($name)) {
