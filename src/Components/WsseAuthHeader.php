@@ -7,29 +7,35 @@ use SoapVar;
 
 class WsseAuthHeader extends SoapHeader
 {
+    // Namespaces
+    private $ns_wsse = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd';
+    private $ns_wsu = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd';
+    private $password_type = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest';
+    private $encoding_type = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary';
 
-    private $wss_ns = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd';
-    private $wsu_ns = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd';
-
-    function __construct($user, $pass)
+    function __construct($username, $password, $wsse_username_token = null)
     {
-        $created = gmdate('Y-m-d\TH:i:s\Z');
-        $nonce = mt_rand();
-        $passdigest = base64_encode(pack('H*', sha1(pack('H*', $nonce) . pack('a*', $created) . pack('a*', $pass))));
+        $simple_nonce = mt_rand();
+        $created_at = gmdate('Y-m-d\TH:i:s\Z');
+        $encoded_nonce = base64_encode($simple_nonce);
+        $password_digest = base64_encode(sha1($simple_nonce . $created_at . $password, true));
 
-        $auth = new \stdClass();
-        $auth->Username = new SoapVar($user, XSD_STRING, null, $this->wss_ns, null, $this->wss_ns);
-        $auth->Password = new SoapVar($pass, XSD_STRING, null, $this->wss_ns, null, $this->wss_ns);
-        $auth->Nonce = new SoapVar($passdigest, XSD_STRING, null, $this->wss_ns, null, $this->wss_ns);
-        $auth->Created = new SoapVar($created, XSD_STRING, null, $this->wss_ns, null, $this->wsu_ns);
+        // Creating WSS identification header using SimpleXML
+        $root = new \SimpleXMLElement('<root/>');
+        $security = $root->addChild('wsse:Security', null, $this->ns_wsse);
+        $usernameToken = $security->addChild('wsse:UsernameToken', null, $this->ns_wsse);
+        if($wsse_username_token){
+            $usernameToken->addAttribute('wsu:Id', $wsse_username_token, $this->ns_wsu);
+        }
+        $usernameToken->addChild('Username', $username, $this->ns_wsse);
+        $usernameToken->addChild('Password', $password_digest, $this->ns_wsse)->addAttribute('Type', $this->password_type);
+        $usernameToken->addChild('Nonce', $encoded_nonce, $this->ns_wsse)->addAttribute('EncodingType', $this->encoding_type);
+        $usernameToken->addChild('Created', $created_at, $this->ns_wsu);
 
-        $username_token = new \stdClass();
-        $username_token->UsernameToken =
-            new SoapVar($auth, SOAP_ENC_OBJECT, null, $this->wss_ns, 'UsernameToken', $this->wss_ns);
-
-        $security_sv = new SoapVar(
-            new SoapVar($username_token, SOAP_ENC_OBJECT, null, $this->wss_ns, 'UsernameToken', $this->wss_ns),
-            SOAP_ENC_OBJECT, null, $this->wss_ns, 'Security', $this->wss_ns);
-        parent::__construct($this->wss_ns, 'Security', $security_sv, true);
+        // Recovering XML value from that object
+        $root->registerXPathNamespace('wsse', $this->ns_wsse);
+        $full = $root->xpath('/root/wsse:Security');
+        $auth = $full[0]->asXML();
+        parent::__construct($this->ns_wsse, 'Security', new SoapVar($auth, XSD_ANYXML), true);
     }
 }

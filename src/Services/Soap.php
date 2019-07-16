@@ -123,6 +123,7 @@ class Soap extends BaseRestService
 //            }
 
             $headers = array_get($config, 'headers');
+            $wsseUsernameToken = array_get($config, 'wsse_username_token');
             $soapHeaders = null;
 
             if (!empty($headers)) {
@@ -130,13 +131,16 @@ class Soap extends BaseRestService
                     $headerType = array_get($header, 'type', 'generic');
                     switch ($headerType) {
                         case 'wsse':
-                            $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
-                            $data = (is_null($data) || !is_array($data)) ? [] : $data;
-                            $username = array_get($data, 'username');
-                            $password = array_get($data, 'password');
+                            $data = (is_null($header) || !is_array($header)) ? [] : $header;
+
+                            if (array_get($data, 'name') == 'username'){
+                                $username = array_get($data, 'data');
+                            } elseif (array_get($data, 'name') == 'password'){
+                                $password = array_get($data, 'data');
+                            }
 
                             if (!empty($username) && !empty($password)) {
-                                $soapHeaders[] = new WsseAuthHeader($username, $password);
+                                    $soapHeaders[] = new WsseAuthHeader($username, $password, $wsseUsernameToken);
                             }
 
                             break;

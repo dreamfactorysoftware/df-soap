@@ -11,7 +11,7 @@ class SoapConfig extends BaseServiceConfigModel
 
     protected $table = 'soap_config';
 
-    protected $fillable = ['service_id', 'wsdl', 'options', 'headers'];
+    protected $fillable = ['service_id', 'wsdl', 'options', 'headers', 'wsse_username_token'];
 
     protected $casts = ['options' => 'array', 'headers' => 'array'];
 
@@ -87,7 +87,14 @@ class SoapConfig extends BaseServiceConfigModel
                 ];
                 $schema['description'] =
                     'An array of headers for the connection. ' .
-                    'For further info, see http://php.net/manual/en/class.soapheader.php.';
+                    'For further info, see http://php.net/manual/en/class.soapheader.php. ' .
+                    'TIP: Select type "WSSE" and write "password", "username" into ' . 
+                    'Name field if you want pass username and password into WSSE header.';
+                break;
+            case 'wsse_username_token':
+            $schema['label'] = 'WSSE Username Token';
+                $schema['default'] = null;
+                $schema['description'] = 'WSSE Username Token';
                 break;
         }
     }
