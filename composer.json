@@ -27,6 +27,7 @@
     "issues": "https://github.com/dreamfactorysoftware/df-soap/issues",
     "wiki":   "https://wiki.dreamfactory.com"
   },
+  "prefer-stable": true,
   "require":           {
     "dreamfactory/df-core": "~0.15.1"
   },
