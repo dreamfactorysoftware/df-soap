@@ -15,7 +15,7 @@ class WsseAuthHeader extends SoapHeader
 
     function __construct($username, $password, $wsse_username_token = null)
     {
-        $simple_nonce = mt_rand();
+        $simple_nonce = random_int(0, mt_getrandmax());
         $created_at = gmdate('Y-m-d\TH:i:s\Z');
         $encoded_nonce = base64_encode($simple_nonce);
         $password_digest = base64_encode(sha1($simple_nonce . $created_at . $password, true));

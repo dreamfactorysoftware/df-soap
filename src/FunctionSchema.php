@@ -1,6 +1,8 @@
 <?php
 namespace DreamFactory\Core\Soap;
 
+use Str;
+
 /**
  * FunctionSchema is the class for representing the metadata of a WSDL-based SOAP function.
  *
@@ -54,7 +56,7 @@ class FunctionSchema
         foreach ($settings as $key => $value) {
             if (!property_exists($this, $key)) {
                 // try camel cased
-                $camel = camel_case($key);
+                $camel = Str::camel($key);
                 if (property_exists($this, $camel)) {
                     $this->{$camel} = $value;
                     continue;
