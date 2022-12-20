@@ -14,6 +14,7 @@ use DreamFactory\Core\Utility\ResourcesWrapper;
 use Log;
 use Symfony\Component\HttpFoundation\Response;
 use DreamFactory\Core\Soap\Components\SoapClient;
+use Arr;
 
 /**
  * Class Soap
@@ -67,8 +68,8 @@ class Soap extends BaseRestService
     public function __construct($settings)
     {
         parent::__construct($settings);
-        $config = array_get($settings, 'config', []);
-        $this->wsdl = array_get($config, 'wsdl');
+        $config = Arr::get($settings, 'config', []);
+        $this->wsdl = Arr::get($config, 'wsdl');
 
         // Validate url setup
         if (empty($this->wsdl)) {
@@ -77,7 +78,7 @@ class Soap extends BaseRestService
                 throw new \InvalidArgumentException('SOAP Services require either a WSDL or both location and URI to be configured.');
             }
         } else {
-            if ((false === strpos($this->wsdl, '/')) && (false === strpos($this->wsdl, '\\'))) {
+            if ((!str_contains($this->wsdl, '/')) && (!str_contains($this->wsdl, '\\'))) {
                 // no directories involved, store it where we want to store it
                 if (!empty($storage = storage_path('wsdl'))) {
                     $this->wsdl = rtrim($storage, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $this->wsdl;
@@ -86,7 +87,7 @@ class Soap extends BaseRestService
                 $this->wsdl = $path;
             }
         }
-        $options = array_get($config, 'options', []);
+        $options = Arr::get($config, 'options', []);
         if (!is_array($options)) {
             $options = [];
         } else {
@@ -112,7 +113,7 @@ class Soap extends BaseRestService
         }
 
         $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
-        $this->cacheTTL = intval(array_get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
+        $this->cacheTTL = intval(Arr::get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
 
         try {
             $this->client = new SoapClient($this->wsdl, $options);
@@ -122,21 +123,21 @@ class Soap extends BaseRestService
 //                $this->dom->preserveWhiteSpace = false;
 //            }
 
-            $headers = array_get($config, 'headers');
-            $wsseUsernameToken = array_get($config, 'wsse_username_token');
+            $headers = Arr::get($config, 'headers');
+            $wsseUsernameToken = Arr::get($config, 'wsse_username_token');
             $soapHeaders = null;
 
             if (!empty($headers)) {
                 foreach ($headers as $header) {
-                    $headerType = array_get($header, 'type', 'generic');
+                    $headerType = Arr::get($header, 'type', 'generic');
                     switch ($headerType) {
                         case 'wsse':
                             $data = (is_null($header) || !is_array($header)) ? [] : $header;
 
-                            if (array_get($data, 'name') == 'username'){
-                                $username = array_get($data, 'data');
-                            } elseif (array_get($data, 'name') == 'password'){
-                                $password = array_get($data, 'data');
+                            if (Arr::get($data, 'name') == 'username'){
+                                $username = Arr::get($data, 'data');
+                            } elseif (Arr::get($data, 'name') == 'password'){
+                                $password = Arr::get($data, 'data');
                             }
 
                             if (!empty($username) && !empty($password)) {
@@ -145,12 +146,12 @@ class Soap extends BaseRestService
 
                             break;
                         default:
-                            $data = json_decode(stripslashes(array_get($header, 'data', '{}')), true);
+                            $data = json_decode(stripslashes(Arr::get($header, 'data', '{}')), true);
                             $data = (is_null($data) || !is_array($data)) ? [] : $data;
-                            $namespace = array_get($header, 'namespace');
-                            $name = array_get($header, 'name');
-                            $mustUnderstand = array_get($header, 'mustunderstand', false);
-                            $actor = array_get($header, 'actor');
+                            $namespace = Arr::get($header, 'namespace');
+                            $name = Arr::get($header, 'name');
+                            $mustUnderstand = Arr::get($header, 'mustunderstand', false);
+                            $actor = Arr::get($header, 'actor');
 
                             if (!empty($namespace) && !empty($name) && !empty($data)) {
                                 $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
@@ -199,10 +200,8 @@ class Soap extends BaseRestService
             $names = [];
             foreach ($functions as $function) {
                 $schema = new FunctionSchema($function);
-                $schema->requestFields =
-                    isset($structures[$schema->requestType]) ? $structures[$schema->requestType] : null;
-                $schema->responseFields =
-                    isset($structures[$schema->responseType]) ? $structures[$schema->responseType] : null;
+                $schema->requestFields = $structures[$schema->requestType] ?? null;
+                $schema->responseFields = $structures[$schema->responseType] ?? null;
                 $names[strtolower($schema->name)] = $schema;
             }
             ksort($names);
@@ -363,8 +362,8 @@ class Soap extends BaseRestService
         foreach ($payload as $key => &$value) {
             if (is_array($value)) {
                 if (0 === strcasecmp('soapvar', $key)) {
-                    $data = array_get($value, 'data');
-                    if ($encoding = array_get($value, 'encoding')) {
+                    $data = Arr::get($value, 'data');
+                    if ($encoding = Arr::get($value, 'encoding')) {
                         // see if there is a constant usage
                         if (!is_numeric($encoding)) {
                             if (defined($encoding)) {
@@ -398,10 +397,10 @@ class Soap extends BaseRestService
                     $payload = new \SoapVar(
                         $data,
                         $encoding,
-                        array_get($value, 'type_name'),
-                        array_get($value, 'type_namespace'),
-                        array_get($value, 'node_name'),
-                        array_get($value, 'node_namespace')
+                        Arr::get($value, 'type_name'),
+                        Arr::get($value, 'type_namespace'),
+                        Arr::get($value, 'node_name'),
+                        Arr::get($value, 'node_namespace')
                     );
                 } else {
                     $this->formatPayload($value);
@@ -459,7 +458,7 @@ class Soap extends BaseRestService
             $faultCode = (property_exists($e, 'faultcode') ? $e->faultcode : $e->getCode());
             $errorCode = Response::HTTP_INTERNAL_SERVER_ERROR;
             // Fault code can be a string.
-            if (is_numeric($faultCode) && strpos($faultCode, '.') === false) {
+            if (is_numeric($faultCode) && !str_contains($faultCode, '.')) {
                 $errorCode = $faultCode;
             }
             throw new InternalServerErrorException($e->getMessage() . ' [Fault code:' . $faultCode . ']', $errorCode);
