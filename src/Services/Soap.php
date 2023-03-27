@@ -11,6 +11,7 @@ use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
+use Illuminate\Support\Facades\Request;
 use Log;
 use Symfony\Component\HttpFoundation\Response;
 use DreamFactory\Core\Soap\Components\SoapClient;
@@ -122,7 +123,8 @@ class Soap extends BaseRestService
 //                $this->dom->load($this->wsdl);
 //                $this->dom->preserveWhiteSpace = false;
 //            }
-
+            $segments = Request::segments();
+            $action = Arr::last($segments);
             $headers = Arr::get($config, 'headers');
             $wsseUsernameToken = Arr::get($config, 'wsse_username_token');
             $soapHeaders = null;
@@ -155,6 +157,7 @@ class Soap extends BaseRestService
 
                             if (!empty($namespace) && !empty($name) && !empty($data)) {
                                 $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
+                                $soapHeaders[] = new \SoapHeader($namespace, 'Action', $action, $mustUnderstand, $actor);
                             }
                     }
                 }
