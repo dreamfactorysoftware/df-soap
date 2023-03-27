@@ -16,6 +16,7 @@ use Log;
 use Symfony\Component\HttpFoundation\Response;
 use DreamFactory\Core\Soap\Components\SoapClient;
 use Arr;
+use Str;
 
 /**
  * Class Soap
