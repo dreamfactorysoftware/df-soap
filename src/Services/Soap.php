@@ -123,8 +123,7 @@ class Soap extends BaseRestService
 //                $this->dom->load($this->wsdl);
 //                $this->dom->preserveWhiteSpace = false;
 //            }
-            $segments = Request::segments();
-            $action = Arr::last($segments);
+            $queries = Request::query();
             $headers = Arr::get($config, 'headers');
             $wsseUsernameToken = Arr::get($config, 'wsse_username_token');
             $soapHeaders = null;
@@ -148,8 +147,14 @@ class Soap extends BaseRestService
 
                             break;
                         default:
-                            $data = json_decode(stripslashes(Arr::get($header, 'data', '{}')), true);
-                            $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                            $data = Arr::get($header, 'data', '{}');
+                            if (Str::contains($data, 'df:')) {
+                                $param = Str::after($data, 'df:');
+                                $data = $queries[$param] ?? '';
+                            } else {
+                                $data = json_decode(stripslashes($data), true);
+                                $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                            }
                             $namespace = Arr::get($header, 'namespace');
                             $name = Arr::get($header, 'name');
                             $mustUnderstand = Arr::get($header, 'mustunderstand', false);
@@ -157,7 +162,6 @@ class Soap extends BaseRestService
 
                             if (!empty($namespace) && !empty($name) && !empty($data)) {
                                 $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
-                                $soapHeaders[] = new \SoapHeader($namespace, 'Action', $action, $mustUnderstand, $actor);
                             }
                     }
                 }
