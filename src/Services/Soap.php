@@ -11,10 +11,12 @@ use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\Utility\ResourcesWrapper;
+use Illuminate\Support\Facades\Request;
 use Log;
 use Symfony\Component\HttpFoundation\Response;
 use DreamFactory\Core\Soap\Components\SoapClient;
 use Arr;
+use Str;
 
 /**
  * Class Soap
@@ -122,7 +124,7 @@ class Soap extends BaseRestService
 //                $this->dom->load($this->wsdl);
 //                $this->dom->preserveWhiteSpace = false;
 //            }
-
+            $queries = Request::query();
             $headers = Arr::get($config, 'headers');
             $wsseUsernameToken = Arr::get($config, 'wsse_username_token');
             $soapHeaders = null;
@@ -146,8 +148,14 @@ class Soap extends BaseRestService
 
                             break;
                         default:
-                            $data = json_decode(stripslashes(Arr::get($header, 'data', '{}')), true);
-                            $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                            $data = Arr::get($header, 'data', '{}');
+                            if (Str::contains($data, 'df:')) {
+                                $param = Str::after($data, 'df:');
+                                $data = $queries[$param] ?? '';
+                            } else {
+                                $data = json_decode(stripslashes($data), true);
+                                $data = (is_null($data) || !is_array($data)) ? [] : $data;
+                            }
                             $namespace = Arr::get($header, 'namespace');
                             $name = Arr::get($header, 'name');
                             $mustUnderstand = Arr::get($header, 'mustunderstand', false);
