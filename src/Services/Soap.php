@@ -536,7 +536,10 @@ class Soap extends BaseRestService
             ],
         ];
         foreach ($this->getFunctions() as $resource) {
-            $paths['/' . $resource->name] = [
+            // Normalize the function name to match what the API actually accepts:
+            // Convert to lowercase and remove underscores
+            $normalizedName = str_replace('_', '', strtolower($resource->name));
+            $paths['/' . $normalizedName] = [
                 'post' => [
                     'summary'     => 'call the ' . $resource->name . ' operation.',
                     'description' => is_null($resource->description) ? '' : $resource->description,
