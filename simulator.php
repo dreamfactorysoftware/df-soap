@@ -4,6 +4,142 @@
 
 declare(strict_types=1);
 
+// Define polyfills before autoload so vendor classes can use them during construction
+if (!function_exists('array_get')) {
+    function array_get($array, $key, $default = null) {
+        if ($key === null) { return $array; }
+        $segments = is_array($key) ? $key : explode('.', (string)$key);
+        foreach ($segments as $segment) {
+            if (is_array($array) && array_key_exists($segment, $array)) {
+                $array = $array[$segment];
+            } elseif ($array instanceof ArrayAccess && isset($array[$segment])) {
+                $array = $array[$segment];
+            } else {
+                return $default;
+            }
+        }
+        return $array;
+    }
+}
+
+// Provide lightweight aliases for Illuminate helpers when framework aliases are not bootstrapped
+if (!class_exists('Arr')) {
+    if (class_exists('\\Illuminate\\Support\\Arr')) {
+        class_alias('\\Illuminate\\Support\\Arr', 'Arr');
+    } else {
+        class Arr {
+            public static function get($array, $key, $default = null) { return array_get($array, $key, $default); }
+        }
+    }
+}
+// Minimal Str helper
+if (!class_exists('Str')) {
+    if (class_exists('\\Illuminate\\Support\\Str')) {
+        // Prefer Illuminate implementation if available (non-facade)
+        class_alias('\\Illuminate\\Support\\Str', 'Str');
+    } else {
+        class Str {
+            public static function contains($haystack, $needles): bool {
+                foreach ((array)$needles as $n) {
+                    if ($n !== '' && strpos((string)$haystack, (string)$n) !== false) { return true; }
+                }
+                return false;
+            }
+            public static function after($subject, $search): string {
+                if ($search === '' || $search === null) { return (string)$subject; }
+                $pos = strpos((string)$subject, (string)$search);
+                return ($pos === false) ? (string)$subject : substr((string)$subject, $pos + strlen((string)$search));
+            }
+        }
+    }
+}
+
+// Minimal Config polyfill (avoid Laravel Facade when app not bootstrapped)
+if (!class_exists('Config')) {
+    class Config {
+        public static function get($key, $default = null) { return $default; }
+    }
+}
+
+// Minimal Log polyfill (no-op to error_log)
+if (!class_exists('Log')) {
+    class Log {
+        protected static function write($level, $message, array $context = []): void {
+            if (is_array($message) || is_object($message)) { $message = json_encode($message); }
+            $line = '[' . strtoupper($level) . "] " . (string)$message;
+            if (!empty($context)) { $line .= ' ' . json_encode($context, JSON_UNESCAPED_SLASHES); }
+            @error_log($line);
+        }
+        public static function info($m, array $c = []): void { self::write('info', $m, $c); }
+        public static function debug($m, array $c = []): void { self::write('debug', $m, $c); }
+        public static function warning($m, array $c = []): void { self::write('warning', $m, $c); }
+        public static function error($m, array $c = []): void { self::write('error', $m, $c); }
+    }
+}
+
+// Minimal storage_path helper to bypass Laravel helper usage
+if (!function_exists('storage_path')) {
+    function storage_path(string $path = ''): string {
+        $base = __DIR__;
+        return $path ? ($base . DIRECTORY_SEPARATOR . trim($path, DIRECTORY_SEPARATOR)) : $base;
+    }
+}
+
+// Minimal Cache facade polyfill (array-backed, non-persistent)
+if (!class_exists('Cache')) {
+    class Cache {
+        private static array $store = [];
+        private static function now(): int { return time(); }
+        private static function cleanup(): void {
+            $t = self::now();
+            foreach (self::$store as $k => $entry) {
+                $exp = $entry['exp'] ?? null;
+                if ($exp !== null && $exp <= $t) { unset(self::$store[$k]); }
+            }
+        }
+        public static function get($key, $default = null) {
+            self::cleanup();
+            if (!array_key_exists($key, self::$store)) return $default;
+            $entry = self::$store[$key];
+            $exp = $entry['exp'] ?? null;
+            if ($exp !== null && $exp <= self::now()) { unset(self::$store[$key]); return $default; }
+            return $entry['val'] ?? $default;
+        }
+        public static function put($key, $value, $ttl = 0): void {
+            $exp = ($ttl && is_numeric($ttl)) ? (self::now() + (int)$ttl) : null;
+            self::$store[$key] = ['val' => $value, 'exp' => $exp];
+        }
+        public static function forever($key, $value): void {
+            self::$store[$key] = ['val' => $value, 'exp' => null];
+        }
+        public static function remember($key, $ttl, $callback) {
+            $val = self::get($key, null);
+            if ($val !== null) return $val;
+            $val = is_callable($callback) ? $callback() : $callback;
+            self::put($key, $val, $ttl);
+            return $val;
+        }
+        public static function rememberForever($key, $callback) {
+            $val = self::get($key, null);
+            if ($val !== null) return $val;
+            $val = is_callable($callback) ? $callback() : $callback;
+            self::forever($key, $val);
+            return $val;
+        }
+        public static function forget($key): bool {
+            $exists = array_key_exists($key, self::$store);
+            unset(self::$store[$key]);
+            return $exists;
+        }
+        public static function flush(): void { self::$store = []; }
+        public static function pull($key, $default = null) {
+            $val = self::get($key, $default);
+            self::forget($key);
+            return $val;
+        }
+    }
+}
+
 require __DIR__ . '/vendor/autoload.php';
 
 // Persist selections across requests for mock REST routing
@@ -160,44 +296,10 @@ function buildTypesFromSoap(InlineSoapClient $client): array {
 }
 
 function parseFunctionSignature(string $function): array {
-    // Examples from __getFunctions():
-    // 1) "SomeResponse getSiteLogs(getSiteLogs $parameters)"  (wrapper type)
-    // 2) "string getSiteLogs(string site, int limit)"         (inline params)
-    $function = trim($function);
-    $responseType = trim(strstr($function, ' ', true));
-    $afterFirstSpace = trim(substr($function, strpos($function, ' ') + 1));
-    $name = strstr($afterFirstSpace, '(', true);
-    $paramsStr = trim($afterFirstSpace);
-    $paramsStr = substr($paramsStr, strpos($paramsStr, '(') + 1);
-    $paramsStr = rtrim($paramsStr, ')');
-    $params = [];
-    $inline = false;
-    $requestType = null;
-    if ($paramsStr !== '' && $paramsStr !== 'void') {
-        // Split by commas not in generics (simple split is fine here)
-        $parts = array_filter(array_map('trim', explode(',', $paramsStr)), fn($p)=> $p !== '');
-        // If exactly one part like "Type $parameters" then it's a wrapper
-        if (count($parts) === 1 && preg_match('/^([\\\w\[\]]+)\s+\$\w+$/', $parts[0], $m)) {
-            $requestType = $m[1];
-            $inline = false;
-        } else {
-            // Inline params: e.g., "string site, int limit"
-            foreach ($parts as $p) {
-                if (preg_match('/^([\\\w\[\]]+)\s+\$?(\w+)$/', $p, $m)) {
-                    $params[] = ['type' => $m[1], 'name' => $m[2]];
-                }
-            }
-            $inline = true;
-            $requestType = null; // will be synthesized
-        }
-    }
-    return [
-        'name' => $name,
-        'requestType' => $requestType,
-        'responseType' => $responseType,
-        'params' => $params,
-        'inline' => $inline,
-    ];
+    $name = strstr(substr($function, strpos($function, ' ') + 1), '(', true);
+    $responseType = strstr($function, ' ', true);
+    $requestType = strstr(trim(strstr($function, '('), '()'), ' ', true);
+    return ['name' => $name, 'requestType' => $requestType, 'responseType' => $responseType];
 }
 
 function buildOpenApiFromWsdl(InlineSoapClient $client, string $serviceName = 'soap'): array {
@@ -214,8 +316,31 @@ function buildOpenApiFromWsdl(InlineSoapClient $client, string $serviceName = 's
 
     $types = buildTypesFromSoap($client);
     $functions = $client->__getFunctions();
-    // We will collect requestBodies and schemas as we go, to handle inline params
+    foreach ($functions as $fn) {
+        $schema = parseFunctionSignature($fn);
+        $paths['/' . $schema['name']] = [
+            'post' => [
+                'summary' => 'call the ' . $schema['name'] . ' operation.',
+                'description' => '',
+                'operationId' => 'call' . ucfirst($serviceName) . $schema['name'],
+                'requestBody' => [ '$ref' => '#/components/requestBodies/' . $schema['requestType'] ],
+                'responses' => [ '200' => ['$ref' => '#/components/responses/' . $schema['responseType']] ]
+            ]
+        ];
+    }
+
     $requests = [];
+    foreach ($functions as $fn) {
+        $schema = parseFunctionSignature($fn);
+        $requests[$schema['requestType']] = [
+            'description' => $schema['requestType'] . ' Request',
+            'content' => [
+                'application/json' => [ 'schema' => ['$ref' => '#/components/schemas/' . $schema['requestType']] ],
+                'application/xml' => [ 'schema' => ['$ref' => '#/components/schemas/' . $schema['requestType']] ],
+            ]
+        ];
+    }
+
     $responses = [
         'SoapResponse' => [
             'description' => 'SOAP Response',
@@ -225,6 +350,17 @@ function buildOpenApiFromWsdl(InlineSoapClient $client, string $serviceName = 's
             ]
         ]
     ];
+    foreach ($functions as $fn) {
+        $schema = parseFunctionSignature($fn);
+        $responses[$schema['responseType']] = [
+            'description' => $schema['responseType'] . ' Response',
+            'content' => [
+                'application/json' => [ 'schema' => ['$ref' => '#/components/schemas/' . $schema['responseType']] ],
+                'application/xml' => [ 'schema' => ['$ref' => '#/components/schemas/' . $schema['responseType']] ],
+            ]
+        ];
+    }
+
     $schemas = array_merge([
         'SoapResponse' => [
             'type' => 'object',
@@ -232,68 +368,10 @@ function buildOpenApiFromWsdl(InlineSoapClient $client, string $serviceName = 's
         ]
     ], $types);
 
-    foreach ($functions as $fn) {
-        $schema = parseFunctionSignature($fn);
-        // Build/ensure request body component
-        $requestBodyRef = null;
-        if ($schema['inline']) {
-            // Synthesize a schema for inline parameters
-            $reqName = $schema['name'] . 'Request';
-            if (!isset($schemas[$reqName])) {
-                $props = [];
-                foreach ($schema['params'] as $p) {
-                    $t = $p['type'];
-                    if (array_key_exists($t, $types)) {
-                        $props[$p['name']] = ['$ref' => '#/components/schemas/' . $t];
-                    } else {
-                        $props[$p['name']] = soapTypeToSchema($t);
-                    }
-                }
-                $schemas[$reqName] = [ 'type' => 'object', 'properties' => $props ];
-            }
-            $requests[$reqName] = [
-                'description' => $reqName . ' Request',
-                'content' => [
-                    'application/json' => [ 'schema' => ['$ref' => '#/components/schemas/' . $reqName] ],
-                    'application/xml' => [ 'schema' => ['$ref' => '#/components/schemas/' . $reqName] ],
-                ]
-            ];
-            $requestBodyRef = '#/components/requestBodies/' . $reqName;
-        } else {
-            // Wrapper request type provided by WSDL/types
-            $reqType = $schema['requestType'];
-            $requests[$reqType] = [
-                'description' => $reqType . ' Request',
-                'content' => [
-                    'application/json' => [ 'schema' => ['$ref' => '#/components/schemas/' . $reqType] ],
-                    'application/xml' => [ 'schema' => ['$ref' => '#/components/schemas/' . $reqType] ],
-                ]
-            ];
-            $requestBodyRef = '#/components/requestBodies/' . $reqType;
-        }
-        // Response mapping
-        $respType = $schema['responseType'];
-        $responses[$respType] = [
-            'description' => $respType . ' Response',
-            'content' => [
-                'application/json' => [ 'schema' => ['$ref' => '#/components/schemas/' . $respType] ],
-                'application/xml' => [ 'schema' => ['$ref' => '#/components/schemas/' . $respType] ],
-            ]
-        ];
-        // Path item
-        $paths['/' . $schema['name']] = [
-            'post' => [
-                'summary' => 'call the ' . $schema['name'] . ' operation.',
-                'description' => '',
-                'operationId' => 'call' . ucfirst($serviceName) . $schema['name'],
-                'requestBody' => [ '$ref' => $requestBodyRef ],
-                'responses' => [ '200' => ['$ref' => '#/components/responses/' . $respType] ]
-            ]
-        ];
-    }
-
     return [
         'openapi' => '3.0.3',
+        // Marker placed near top for easy visual confirmation
+        'x-dfsoap' => [ 'variant' => 'fallback', 'version' => '0.1.0-dev', 'build' => date('c'), 'marker' => 'dfsoap-local' ],
         'info' => [
             'title' => 'df-soap OpenAPI from WSDL',
             'version' => '1.0.0'
@@ -378,18 +456,164 @@ if ($wsdl) {
             $nb = parseFunctionSignature($b)['name'] ?? $b;
             return strcasecmp($na, $nb);
         });
-        // Build OpenAPI doc
-        $openApiDoc = buildOpenApiFromWsdl($client, 'soap');
+        // Build OpenAPI doc: prefer Soap.php export if available, fallback to local builder
+        $openApiDoc = null;
+        try {
+            if (class_exists('DreamFactory\\Core\\Soap\\Services\\Soap')) {
+                // Subclass Soap to expose protected API doc builders
+                if (!class_exists('SoapDocExport')) {
+                    class SoapDocExport extends \DreamFactory\Core\Soap\Services\Soap {
+                        private function buildExampleFromFields($fields){
+                            if (empty($fields) || !is_array($fields)) return new \stdClass();
+                            $out = [];
+                            foreach ($fields as $name => $field) {
+                                // Field may be a $ref array or a primitive descriptor
+                                if (is_array($field)) {
+                                    if (isset($field['$ref'])) {
+                                        // components schema ref name
+                                        $ref = $field['$ref'];
+                                        $refName = substr($ref, strrpos($ref, '/')+1);
+                                        // recurse by looking up schema structure from getTypes()
+                                        $types = $this->getTypes();
+                                        $sub = $types[$refName] ?? null;
+                                        $out[$name] = $this->buildExampleFromFields(($sub['properties'] ?? $sub) ?: []);
+                                    } elseif (($field['type'] ?? null) === 'object') {
+                                        $out[$name] = $this->buildExampleFromFields($field['properties'] ?? []);
+                                    } elseif (($field['type'] ?? null) === 'array') {
+                                        $arrItem = $this->buildExampleFromFields([ 'item' => ($field['items'] ?? []) ]);
+                                        $out[$name] = [ $arrItem['item'] ?? new \stdClass() ];
+                                    } else {
+                                        // primitive
+                                        $t = $field['type'] ?? 'string';
+                                        $out[$name] = ($t === 'integer' || $t === 'number') ? 0 : (($t === 'boolean') ? false : '');
+                                    }
+                                } else {
+                                    $out[$name] = '';
+                                }
+                            }
+                            return $out;
+                        }
+                        public function exportOpenApi(): array {
+                            $paths = $this->getApiDocPaths();
+                            $components = [
+                                'requestBodies' => $this->getApiDocRequests(),
+                                'responses' => $this->getApiDocResponses(),
+                                'schemas' => $this->getApiDocSchemas(),
+                            ];
+                            // Vendor extension: provide per-function example payloads derived from Soap.php structures
+                            $examples = [];
+                            foreach ($this->getFunctions() as $fn) {
+                                $root = $fn->requestType;
+                                $fields = $fn->requestFields; // object properties for request
+                                $examples[$fn->name] = [ $root => $this->buildExampleFromFields($fields ?: []) ];
+                            }
+                            return [
+                                'openapi' => '3.0.3',
+                                'info' => [ 'title' => 'df-soap OpenAPI from WSDL (Soap.php)', 'version' => '1.0.0' ],
+                                'paths' => $paths,
+                                'components' => $components,
+                                'x-dfExamples' => $examples,
+                            ];
+                        }
+                    }
+                }
+                $settings = [
+                    'name' => 'soap',
+                    'config' => [
+                        'wsdl' => $wsdl,
+                        'options' => $opts,
+                        // pass headers if any; Soap constructor will map
+                        'headers' => read_json_array($headersJson),
+                    ],
+                ];
+                $svc = new SoapDocExport($settings);
+                $openApiDoc = $svc->exportOpenApi();
+            }
+        } catch (\Throwable $e) {
+            // ignore and fallback
+        }
+        if ($openApiDoc === null) {
+            $openApiDoc = buildOpenApiFromWsdl($client, 'soap');
+        }
 
         if ($action === 'call' && $functionName !== '') {
             $payload = read_json_array($payloadJson);
             try {
                 // DF REST semantics: POST with JSON body, or GET with query params
                 $callArg = empty($payload) ? read_json_array($payloadJson) : $payload;
+                // Unwrap common roots and wrap using accurate wrapper element name from Soap.php metadata
+                if (is_array($callArg)) {
+                    // If payload is { "FunctionName": { ... } } unwrap it
+                    $keys = array_keys($callArg);
+                    if (count($keys) === 1 && strcasecmp($keys[0], $functionName) === 0 && is_array($callArg[$keys[0]] ?? null)) {
+                        $callArg = $callArg[$keys[0]];
+                    }
+                    // Resolve wrapper element key (e.g., addLogInput) from SoapDocExport if available
+                    $wrapperKey = null;
+                    try {
+                        if (class_exists('SoapDocExport')) {
+                            $settings2 = [ 'name' => 'soap', 'config' => [ 'wsdl' => $wsdl, 'options' => $opts ] ];
+                            $svc2 = new SoapDocExport($settings2);
+                            foreach ($svc2->getFunctions() as $fn) {
+                                if (strcasecmp($fn->name, $functionName) === 0) {
+                                    if (is_array($fn->requestFields) && count($fn->requestFields) === 1) {
+                                        $wrapperKey = array_keys($fn->requestFields)[0];
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (\Throwable $ignore) {}
+                    if (!$wrapperKey) { $wrapperKey = lcfirst((string)$functionName) . 'Input'; }
+                    // If payload is the inner object (fields only), wrap under wrapperKey
+                    $hasParamKey = is_array($callArg) && array_key_exists($wrapperKey, $callArg);
+                    if (!$hasParamKey) {
+                        $callArg = [ $wrapperKey => $callArg ];
+                    }
+                }
+                // If WSDL operation is document/literal wrapped with a single $parameters arg,
+                // PHP SoapClient expects the payload under key 'parameters'
+                try {
+                    $needsWrapper = false;
+                    foreach ($client->__getFunctions() as $sig) {
+                        $info = parseFunctionSignature($sig);
+                        if (strcasecmp($info['name'] ?? '', $functionName) === 0) {
+                            if (preg_match('/\(\$parameters\)/i', $sig)) { $needsWrapper = true; }
+                            break;
+                        }
+                    }
+                    if ($needsWrapper && is_array($callArg) && !array_key_exists('parameters', $callArg)) {
+                        $callArg = ['parameters' => $callArg];
+                    }
+                } catch (\Throwable $ignore) {}
                 $response = $client->$functionName($callArg);
                 $result = json_decode(json_encode($response, JSON_PARTIAL_OUTPUT_ON_ERROR), true);
             } catch (Throwable $e) {
-                $errors[] = $e->getMessage();
+                // Retry alternates if the first attempt failed
+                $errMsg = $e->getMessage();
+                $didRetry = false;
+                try {
+                    // 1) Toggle 'parameters'
+                    if (is_array($callArg)) {
+                        $alt = array_key_exists('parameters', $callArg) ? $callArg['parameters'] : ['parameters' => $callArg];
+                        $response = $client->$functionName($alt);
+                        $result = json_decode(json_encode($response, JSON_PARTIAL_OUTPUT_ON_ERROR), true);
+                        $didRetry = true; $errMsg = '';
+                    }
+                } catch (\Throwable $e2) { $errMsg = $e2->getMessage(); }
+                if (!$didRetry) {
+                    try {
+                        // 2) Wrap under operation name
+                        if (is_array($callArg)) {
+                            $inner = array_key_exists('parameters', $callArg) ? $callArg['parameters'] : $callArg;
+                            $alt2 = [ $functionName => $inner ];
+                            $response = $client->$functionName($alt2);
+                            $result = json_decode(json_encode($response, JSON_PARTIAL_OUTPUT_ON_ERROR), true);
+                            $didRetry = true; $errMsg = '';
+                        }
+                    } catch (\Throwable $e3) { $errMsg = $e3->getMessage(); }
+                }
+                if (!$didRetry && $errMsg) { $errors[] = $errMsg; }
             }
             // Capture raw SOAP frames
             try { $last['request'] = (string)$client->__getLastRequest(); } catch (Throwable $e) {}
@@ -397,21 +621,20 @@ if ($wsdl) {
             try { $last['response'] = (string)$client->__getLastResponse(); } catch (Throwable $e) {}
             try { $last['response_headers'] = (string)$client->__getLastResponseHeaders(); } catch (Throwable $e) {}
 
-            // If this is an AJAX/fetch request asking for JSON, return data instead of redirecting
-            $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
-            $xrw = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
-            if (stripos($accept, 'application/json') !== false || strtolower($xrw) === 'fetch' || strtolower($xrw) === 'xmlhttprequest') {
-                header('Content-Type: application/json');
+            // If this is an AJAX request, return JSON and do not refresh the page
+            $isAjax = (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower((string)$_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
+                || (strpos($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json') !== false);
+            if ($isAjax) {
+                header('Content-Type: application/json; charset=UTF-8');
                 echo json_encode([
-                    'ok'      => empty($errors),
-                    'errors'  => $errors,
-                    'last'    => $last,
-                    'result'  => $result,
+                    'last'   => $last,
+                    'result' => $result,
+                    'errors' => $errors,
                 ], JSON_UNESCAPED_SLASHES);
                 exit;
             }
 
-            // Post/Redirect/Get to prevent browser resubmission warning on refresh
+            // Post/Redirect/Get to prevent browser resubmission warning on refresh (non-AJAX only)
             if ($method === 'POST') {
                 $_SESSION['sim_flash_last'] = $last;
                 $_SESSION['sim_flash_result'] = $result;
@@ -453,8 +676,73 @@ if ($wsdl) {
                 }
                 $payload = read_json_array($payloadJson);
                 $callArg = empty($payload) ? [] : $payload;
+                // Unwrap and normalize as in the invoke path
+                if (is_array($callArg)) {
+                    $keys = array_keys($callArg);
+                    if (count($keys) === 1 && strcasecmp($keys[0], $functionName) === 0 && is_array($callArg[$keys[0]] ?? null)) {
+                        $callArg = $callArg[$keys[0]];
+                    }
+                    $wrapperKey = null;
+                    try {
+                        if (class_exists('SoapDocExport')) {
+                            $settings2 = [ 'name' => 'soap', 'config' => [ 'wsdl' => $wsdl, 'options' => $opts ] ];
+                            $svc2 = new SoapDocExport($settings2);
+                            foreach ($svc2->getFunctions() as $fn) {
+                                if (strcasecmp($fn->name, $functionName) === 0) {
+                                    if (is_array($fn->requestFields) && count($fn->requestFields) === 1) {
+                                        $wrapperKey = array_keys($fn->requestFields)[0];
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (\Throwable $ignore) {}
+                    if (!$wrapperKey) { $wrapperKey = lcfirst((string)$functionName) . 'Input'; }
+                    $hasParamKey = is_array($callArg) && array_key_exists($wrapperKey, $callArg);
+                    if (!$hasParamKey) {
+                        $callArg = [ $wrapperKey => $callArg ];
+                    }
+                }
+                // Mirror wrapper semantics as above for preview
+                try {
+                    $needsWrapper = false;
+                    foreach ($preview->__getFunctions() as $sig) {
+                        $info = parseFunctionSignature($sig);
+                        if (strcasecmp($info['name'] ?? '', $functionName) === 0) {
+                            if (preg_match('/\(\$parameters\)/i', $sig)) { $needsWrapper = true; }
+                            break;
+                        }
+                    }
+                    if ($needsWrapper && is_array($callArg) && !array_key_exists('parameters', $callArg)) {
+                        $callArg = ['parameters' => $callArg];
+                    }
+                } catch (\Throwable $ignore) {}
                 try { $preview->$functionName($callArg); } catch (\Throwable $ignore) {}
-                echo json_encode(['request_xml' => (string)($preview->capturedXml ?? '')]);
+                $xml = (string)($preview->capturedXml ?? '');
+                // Fallback: if body looks empty or missing the wrapper element, try alternates (preview-only)
+                try {
+                    $expected = isset($wrapperKey) && is_string($wrapperKey) ? $wrapperKey : null;
+                    $missingExpected = ($expected && $xml && (strpos($xml, '<'.$expected.'>') === false) && (strpos($xml, '<'.$expected.' ') === false));
+                    $looksEmpty = ($xml && preg_match('/<([A-Za-z0-9_:]+)\s*[^>]*>\s*<\/\1>/', $xml));
+                    if (($missingExpected || $looksEmpty) && is_array($callArg)) {
+                        $alt = $callArg;
+                        if (array_key_exists('parameters', $alt)) { $alt = $alt['parameters']; } else { $alt = ['parameters' => $alt]; }
+                        $preview->capturedXml = null;
+                        try { $preview->$functionName($alt); } catch (\Throwable $ignore2) {}
+                        $altXml = (string)($preview->capturedXml ?? '');
+                        if ($altXml && (!$xml || strlen($altXml) > strlen($xml))) { $xml = $altXml; }
+                        // 2) Try wrapping under operation name
+                        if ($xml && ($missingExpected || $looksEmpty)) {
+                            $inner = array_key_exists('parameters', $callArg) ? $callArg['parameters'] : $callArg;
+                            $alt2 = [ $functionName => $inner ];
+                            $preview->capturedXml = null;
+                            try { $preview->$functionName($alt2); } catch (\Throwable $ignore4) {}
+                            $alt2Xml = (string)($preview->capturedXml ?? '');
+                            if ($alt2Xml && (!$xml || strlen($alt2Xml) > strlen($xml))) { $xml = $alt2Xml; }
+                        }
+                    }
+                } catch (\Throwable $ignore3) {}
+                echo json_encode(['request_xml' => $xml]);
             } catch (\Throwable $e) {
                 echo json_encode(['request_xml' => '', 'error' => $e->getMessage()]);
             }
@@ -463,6 +751,323 @@ if ($wsdl) {
     } catch (Throwable $e) {
         $errors[] = $e->getMessage();
     }
+}
+
+// Local-only debug endpoints
+if (0 === strpos($_SERVER['REQUEST_URI'] ?? '', '/__debug/')) {
+    $ra = $_SERVER['REMOTE_ADDR'] ?? '';
+    if (!in_array($ra, ['127.0.0.1', '::1'])) {
+        header('HTTP/1.1 404 Not Found');
+        exit;
+    }
+    $path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?: '';
+    // Ensure SoapDocExport exists
+    if (class_exists('DreamFactory\\Core\\Soap\\Services\\Soap') && !class_exists('SoapDocExport')) {
+        class SoapDocExport extends \DreamFactory\Core\Soap\Services\Soap {
+            public function exportOpenApi(): array {
+                $paths = $this->getApiDocPaths();
+                $components = [
+                    'requestBodies' => $this->getApiDocRequests(),
+                    'responses'     => $this->getApiDocResponses(),
+                    'schemas'       => $this->getApiDocSchemas(),
+                ];
+                return [
+                    'openapi'    => '3.0.3',
+                    // Marker placed near top for easy visual confirmation
+                    'x-dfsoap'   => [ 'variant' => 'Soap.php', 'version' => '0.1.0-dev', 'build' => date('c'), 'marker' => 'dfsoap-local' ],
+                    'info'       => [ 'title' => 'df-soap OpenAPI from WSDL (Soap.php)', 'version' => '1.0.0' ],
+                    'paths'      => $paths,
+                    'components' => $components,
+                ];
+            }
+        }
+    }
+    // Build defaults
+    $defaultWsdl = file_exists(__DIR__ . '/test_wsdl.xml') ? __DIR__ . '/test_wsdl.xml' : '';
+    $wsdlParam = $_GET['wsdl'] ?? $defaultWsdl;
+    $opts = json_decode($_GET['options'] ?? '{}', true) ?: [];
+    if (!isset($opts['trace'])) { $opts['trace'] = true; }
+
+    if ($path === '/__debug/openapi.json') {
+        header('Content-Type: application/json; charset=UTF-8');
+        $doc = null;
+        try {
+            if (class_exists('SoapDocExport')) {
+                $settings = [ 'name' => 'soap', 'config' => [ 'wsdl' => $wsdlParam, 'options' => $opts ] ];
+                $svc = new SoapDocExport($settings);
+                $doc = $svc->exportOpenApi();
+            }
+        } catch (\Throwable $ignore) {}
+        if ($doc === null) {
+            try {
+                $client = new InlineSoapClient($wsdlParam, $opts);
+                $doc = buildOpenApiFromWsdl($client, 'soap');
+            } catch (\Throwable $e) {
+                echo json_encode(['error' => $e->getMessage()]);
+                exit;
+            }
+        }
+        echo json_encode($doc, JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+    if ($path === '/__debug/compare') {
+        header('Content-Type: application/json; charset=UTF-8');
+        $out = [ 'wsdl' => $wsdlParam, 'summary' => [], 'details' => [] ];
+        // Convert PHP errors to exceptions to surface as JSON
+        $prevHandler = set_error_handler(function($severity, $message, $file, $line){
+            throw new \ErrorException($message, 0, $severity, $file, $line);
+        });
+        try {
+            // Helper: parse __getFunctions signature -> ['name'=>..., 'params'=>['p1','p2',...]]
+            $parseSig = function(string $sig): array {
+                $info = parseFunctionSignature($sig); // ['name','requestType','responseType']
+                $params = [];
+                if (preg_match('/\((.*)\)/', $sig, $m)) {
+                    $paramStr = trim($m[1] ?? '');
+                    if ($paramStr !== '') {
+                        foreach (array_map('trim', explode(',', $paramStr)) as $part) {
+                            if (preg_match('/\\$([A-Za-z_][A-Za-z0-9_]*)/', $part, $pm)) {
+                                $params[] = $pm[1];
+                            }
+                        }
+                    }
+                }
+                return ['name' => $info['name'] ?? '', 'params' => $params, 'requestType' => $info['requestType'] ?? null];
+            };
+            $deep = false;
+            $deepParam = $_GET['deep'] ?? '0';
+            if ($deepParam === '1' || $deepParam === 'true' || $deepParam === 'yes') { $deep = true; }
+            // Ground truth from raw WSDL via SoapClient
+            $client = new InlineSoapClient($wsdlParam, $opts);
+            $rawFns = $client->__getFunctions();
+            $wsdlMap = [];
+            foreach ($rawFns as $sig) {
+                $p = $parseSig($sig);
+                if (!empty($p['name'])) {
+                    $wsdlMap[strtolower($p['name'])] = [ 'name' => $p['name'], 'params' => ($p['params'] ?? []), 'requestType' => ($p['requestType'] ?? null) ];
+                }
+            }
+            // Soap.php view
+            $apiMap = [];
+            $types = [];
+            if (class_exists('SoapDocExport')) {
+                $settings = [ 'name' => 'soap', 'config' => [ 'wsdl' => $wsdlParam, 'options' => $opts ] ];
+                $svc = new SoapDocExport($settings);
+                foreach ($svc->getFunctions() as $fn) {
+                    $props = [];
+                    $rf = $fn->requestFields;
+                    if (is_array($rf)) {
+                        // Expect ['type'=>'object','properties'=>[...]]
+                        if (isset($rf['properties']) && is_array($rf['properties'])) {
+                            $props = array_keys($rf['properties']);
+                        }
+                    }
+                    $apiMap[strtolower($fn->name)] = [ 'name' => $fn->name, 'params' => $props, 'requestType' => $fn->requestType ];
+                }
+                $types = $svc->getTypes();
+            }
+            // WSDL types (for deep compare)
+            $wsdlTypes = buildTypesFromSoap($client);
+            // Compare
+            $wsdlOnly = array_values(array_diff(array_keys($wsdlMap), array_keys($apiMap)));
+            $apiOnly = array_values(array_diff(array_keys($apiMap), array_keys($wsdlMap)));
+            $both = array_values(array_intersect(array_keys($wsdlMap), array_keys($apiMap)));
+            // Optional single-function filter
+            $fnFilter = $_GET['fn'] ?? '';
+            if ($fnFilter !== '') {
+                $key = strtolower($fnFilter);
+                $both = array_values(array_filter($both, function($k) use ($key){ return $k === $key; }));
+            }
+            $paramDiffs = [];
+            foreach ($both as $k) {
+                $w = $wsdlMap[$k]['params'];
+                $a = $apiMap[$k]['params'];
+                $miss = [];
+                $extra = [];
+                $mode = 'shallow';
+                if ($deep) {
+                    $mode = 'deep';
+                    // Resolve wrapper type properties from WSDL types
+                    $wrapper = $wsdlMap[$k]['requestType'] ?? null;
+                    $wsdlProps = [];
+                    if ($wrapper && isset($wsdlTypes[$wrapper])) {
+                        $schema = $wsdlTypes[$wrapper];
+                        // Dereference up to 3 levels if needed
+                        $guard = 0; $visited = [];
+                        while (is_array($schema) && isset($schema['$ref']) && $guard < 3) {
+                            $ref = $schema['$ref'];
+                            $refName = str_replace('#/components/schemas/', '', (string)$ref);
+                            if (isset($visited[$refName])) { break; }
+                            $visited[$refName] = true; $guard++;
+                            $schema = $wsdlTypes[$refName] ?? $schema;
+                        }
+                        if (is_array($schema) && isset($schema['type']) && $schema['type'] === 'object' && isset($schema['properties']) && is_array($schema['properties'])) {
+                            $wsdlProps = array_keys($schema['properties']);
+                        }
+                    }
+                    $resolvedFrom = null; $unresolved = false;
+                    if (empty($wsdlProps)) {
+                        // Try heuristic: search any object type with properties whose name contains function or wrapper
+                        $fnName = $wsdlMap[$k]['name'] ?? '';
+                        $needleA = strtolower((string)$fnName);
+                        $needleB = strtolower((string)$wrapper);
+                        foreach ($wsdlTypes as $tName => $tSchema) {
+                            if (!is_array($tSchema) || !isset($tSchema['type']) || $tSchema['type'] !== 'object' || !isset($tSchema['properties']) || !is_array($tSchema['properties'])) { continue; }
+                            $lname = strtolower($tName);
+                            if (($needleA && strpos($lname, $needleA) !== false) || ($needleB && strpos($lname, $needleB) !== false)) {
+                                $wsdlProps = array_keys($tSchema['properties']);
+                                $resolvedFrom = $tName;
+                                break;
+                            }
+                        }
+                        // DOM WSDL fallback: locate element/complexType and extract sequence elements
+                        if (empty($wsdlProps)) {
+                            try {
+                                $wsdlXml = @file_get_contents($wsdlParam);
+                                if ($wsdlXml !== false && is_string($wsdlXml) && trim($wsdlXml) !== '') {
+                                    $dom = new \DOMDocument();
+                                    $prev = libxml_use_internal_errors(true);
+                                    if (@$dom->loadXML($wsdlXml)) {
+                                        $xp = new \DOMXPath($dom);
+                                        // Build safe XPath string literal
+                                        $xpathLiteral = function(string $s): string {
+                                            if (strpos($s, "'") === false) { return "'" . $s . "'"; }
+                                            if (strpos($s, '"') === false) { return '"' . $s . '"'; }
+                                            // contains both ' and ", use concat pieces
+                                            $parts = preg_split("/(')/", $s, -1, PREG_SPLIT_DELIM_CAPTURE);
+                                            $out = [];
+                                            foreach ($parts as $part) {
+                                                if ($part === "'") { $out[] = '"' . "'" . '"'; }
+                                                elseif ($part !== '') { $out[] = "'" . $part . "'"; }
+                                            }
+                                            return 'concat(' . implode(',', $out) . ')';
+                                        };
+                                        // Helper to collect element(@name) under complexType/sequence
+                                        $collectProps = function(\DOMNode $ctx) use ($xp): array {
+                                            $props = [];
+                                            foreach ($xp->query(".//*[local-name()='sequence']/*[local-name()='element']", $ctx) as $el) {
+                                                /** @var \DOMElement $el */
+                                                $n = $el->getAttribute('name');
+                                                if ($n !== '') { $props[] = $n; }
+                                            }
+                                            return array_values(array_unique($props));
+                                        };
+                                        // Resolve complexType by name and include extension base chain (guarded)
+                                        $visitedTypes = [];
+                                        $propsFromTypeName = null;
+                                        $propsFromTypeName = function(string $typeName) use ($xp, $collectProps, &$propsFromTypeName, &$visitedTypes): array {
+                                            if (isset($visitedTypes[$typeName])) { return []; }
+                                            $visitedTypes[$typeName] = true;
+                                            $out = [];
+                                            $typesFound = $xp->query("//*[local-name()='complexType' and @name='" . addslashes($typeName) . "']");
+                                            if ($typesFound && $typesFound->length) {
+                                                /** @var \DOMElement $ct */
+                                                $ct = $typesFound->item(0);
+                                                $out = array_values(array_unique(array_merge($out, $collectProps($ct))));
+                                                // Follow complexContent/extension base
+                                                $ext = $xp->query(".//*[local-name()='complexContent']/*[local-name()='extension']", $ct);
+                                                if ($ext && $ext->length) {
+                                                    /** @var \DOMElement $extEl */
+                                                    $extEl = $ext->item(0);
+                                                    $base = $extEl->getAttribute('base');
+                                                    if ($base !== '') {
+                                                        $baseLocal = ($p = strpos($base, ':')) !== false ? substr($base, $p + 1) : $base;
+                                                        $out = array_values(array_unique(array_merge($out, $collectProps($extEl), $propsFromTypeName($baseLocal))));
+                                                    } else {
+                                                        $out = array_values(array_unique(array_merge($out, $collectProps($extEl))));
+                                                    }
+                                                }
+                                            }
+                                            return $out;
+                                        };
+                                        // Find element matching wrapper or function
+                                        $candidates = [];
+                                        if ($wrapper) { $candidates[] = $wrapper; }
+                                        if ($fnName && (! $wrapper || strtolower($fnName) !== strtolower($wrapper))) { $candidates[] = $fnName; }
+                                        foreach ($candidates as $cand) {
+                                            $nodes = $xp->query("//*[local-name()='element' and @name=" . $xpathLiteral($cand) . "]");
+                                            if ($nodes && $nodes->length) {
+                                                /** @var \DOMElement $elem */
+                                                $elem = $nodes->item(0);
+                                                // Inline complexType
+                                                $props = $collectProps($elem);
+                                                if (!empty($props)) { $wsdlProps = $props; $resolvedFrom = $cand; break; }
+                                                // type reference
+                                                $typeAttr = $elem->getAttribute('type');
+                                                if ($typeAttr !== '') {
+                                                    $localType = ($p = strpos($typeAttr, ':')) !== false ? substr($typeAttr, $p + 1) : $typeAttr;
+                                                    $props = $propsFromTypeName($localType);
+                                                    if (!empty($props)) { $wsdlProps = $props; $resolvedFrom = $localType; break; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    libxml_clear_errors();
+                                    libxml_use_internal_errors($prev);
+                                }
+                            } catch (\Throwable $ignored) {}
+                        }
+                        if (empty($wsdlProps)) { $unresolved = true; }
+                    }
+                    $miss = array_values(array_diff($wsdlProps, $a));
+                    $extra = array_values(array_diff($a, $wsdlProps));
+                    if ($miss || $extra || $unresolved) {
+                        $paramDiffs[] = [
+                            'function' => $wsdlMap[$k]['name'],
+                            'mode' => $mode,
+                            'wsdlWrapper' => $wrapper,
+                            'wsdlResolvedFrom' => $resolvedFrom,
+                            'wsdlProps' => $wsdlProps,
+                            'apiProps' => $a,
+                            'missingInApi' => $miss,
+                            'extraInApi' => $extra,
+                            'unresolved' => $unresolved,
+                            'requestType' => $apiMap[$k]['requestType'] ?? null,
+                        ];
+                    }
+                } else {
+                    // If WSDL uses single wrapper parameter like "$parameters", skip param-level comparison
+                    if (count($w) <= 1) { continue; }
+                    $miss = array_values(array_diff($w, $a));
+                    $extra = array_values(array_diff($a, $w));
+                    if ($miss || $extra) {
+                        $paramDiffs[] = [
+                            'function' => $wsdlMap[$k]['name'],
+                            'mode' => $mode,
+                            'wsdlParams' => $w,
+                            'apiParams' => $a,
+                            'missingInApi' => $miss,
+                            'extraInApi' => $extra,
+                            'requestType' => $apiMap[$k]['requestType'] ?? null,
+                        ];
+                    }
+                }
+            }
+            $out['summary'] = [
+                'wsdlFunctions' => count($wsdlMap),
+                'apiFunctions'  => count($apiMap),
+                'wsdlOnly'      => count($wsdlOnly),
+                'apiOnly'       => count($apiOnly),
+                'paramMismatches' => count($paramDiffs),
+            ];
+            $out['details'] = [
+                'wsdlOnly' => array_map(function($k) use ($wsdlMap){ return $wsdlMap[$k]['name'] ?? $k; }, $wsdlOnly),
+                'apiOnly'  => array_map(function($k) use ($apiMap){ return $apiMap[$k]['name'] ?? $k; }, $apiOnly),
+                'paramMismatches' => $paramDiffs,
+            ];
+        } catch (\Throwable $e) {
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
+        } finally {
+            if ($prevHandler !== null) { restore_error_handler(); }
+        }
+        echo json_encode($out, JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+    // Unknown debug path
+    header('HTTP/1.1 404 Not Found');
+    exit;
 }
 
 // Mock REST endpoint for Swagger UI: /mock/{function}
@@ -650,6 +1255,52 @@ header('Content-Type: text/html; charset=UTF-8');
 
     /* Auto dark mode */
     @media (prefers-color-scheme: dark) {
+      body { background:#0d1117; color:#c9d1d9; }
+      .tab { background:#161b22; border-color:#30363d; color:#c9d1d9; }
+      .tab.active { background:#0d1117; }
+      .tabs { border-bottom-color:#30363d; }
+      .panel { background:#0d1117; border-color:#30363d; }
+      .panel.result { background:#0f2d18; border-color:#2ea043; }
+      .muted { color:#8b949e; }
+      pre { background:#0d1117; color:#c9d1d9; }
+      input, textarea, select { background:#0d1117; color:#c9d1d9; border-color:#30363d; }
+      .fn-list { background:#161b22; border-color:#30363d; }
+      .fn-item:hover { background:#0b1020; }
+      .fn-item.active { background:#0b1a36; border-color:#1f6feb; }
+      .tok-op { color:#99f6e4; background:#042f2e; border-color:#115e59; }
+      .tok-ret { color:#ffedd5; background:#451a03; border-color:#9a3412; }
+      .tok-param { color:#93c5fd; background:#0b1730; border-color:#1d4ed8; }
+      .rainbow-border { border-color: transparent; }
+      button { background:#1f6feb; }
+      button.secondary { background:#6e7681; }
+
+      /* Swagger UI dark overrides */
+      .swagger-ui, .swagger-ui .topbar { background:#0d1117; }
+      .swagger-ui .info .title, .swagger-ui .info .base-url, .swagger-ui, .swagger-ui * { color:#c9d1d9; }
+      .swagger-ui .opblock { background:#161b22; border-color:#30363d; }
+      .swagger-ui .opblock .opblock-section-header { background:#0d1117; border-color:#30363d; }
+      .swagger-ui .opblock-summary { background:#0d1117; border-color:#30363d; color:#c9d1d9; }
+      .swagger-ui .opblock-summary-method { filter: brightness(0.9); }
+      .swagger-ui .opblock-tag { color:#c9d1d9; background:#0d1117; border-color:#30363d; }
+      .swagger-ui .scheme-container { background:#161b22; border-color:#30363d; }
+      .swagger-ui .model, .swagger-ui .model-box, .swagger-ui .model-box-control, .swagger-ui .parameters-col_description { background:#0d1117; border-color:#30363d; color:#c9d1d9; }
+      .swagger-ui table tbody tr td, .swagger-ui table thead tr th { border-color:#30363d; }
+      .swagger-ui .response-col_status { color:#c9d1d9; }
+      .swagger-ui .btn, .swagger-ui .btn.execute { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+      .swagger-ui .btn.authorize { background:#238636; border-color:#238636; color:#fff; }
+      .swagger-ui .dialog-ux { background:#0d1117; border-color:#30363d; }
+      .swagger-ui .dialog-ux .modal-ux { background:#161b22; border-color:#30363d; }
+      .swagger-ui .opblock-description-wrapper, .swagger-ui .opblock-external-docs-wrapper, .swagger-ui .opblock-title_normal { color:#c9d1d9; }
+      .swagger-ui .markdown code, .swagger-ui .prop-type { color:#a5d6ff; }
+      .swagger-ui .parameter__name, .swagger-ui .parameter__type { color:#c9d1d9; }
+      .swagger-ui .tab li { color:#c9d1d9; }
+      .swagger-ui .tab li.active { border-color:#1f6feb; color:#c9d1d9; }
+      .swagger-ui .copy-to-clipboard { filter: invert(0.85); }
+      .swagger-ui .model-toggle { filter: invert(0.85); }
+      .swagger-ui input[type="text"], .swagger-ui textarea, .swagger-ui select { background:#0d1117; color:#c9d1d9; border-color:#30363d; }
+      .swagger-ui .checkbox input + label:before { border-color:#30363d; }
+    }
+    @media (prefers-color-scheme: dark) {
       body { background: #0b0f14; color: #e6edf3; }
       .tab { background: #0f1722; border-color: #30363d; color: #e6edf3; }
       .tab.active { background: #0b0f14; }
@@ -670,20 +1321,6 @@ header('Content-Type: text/html; charset=UTF-8');
       .tok-ret { color:#fdba74; background:#451a03; border-color:#7c2d12; }
       .tok-param { color:#93c5fd; background:#0a172a; border-color:#1e3a8a; }
       .tok-sig { color:#9aa4ae; }
-      /* Swagger UI dark overrides */
-      #swagger-ui { color: #e6edf3; }
-      #swagger-ui .topbar { background: #0b0f14; border-bottom: 1px solid #30363d; }
-      #swagger-ui .info, #swagger-ui .scheme-container, #swagger-ui .opblock, #swagger-ui .model-box, #swagger-ui .opblock-tag { background: #0f1722; color:#e6edf3; border-color:#30363d; }
-      #swagger-ui .opblock { border: 1px solid #30363d; }
-      #swagger-ui .opblock .opblock-summary { background:#0b0f14; border-color:#30363d; }
-      #swagger-ui .opblock .opblock-summary-method { background:#1f6feb; color:#fff; }
-      #swagger-ui .opblock-description-wrapper, #swagger-ui .responses-inner, #swagger-ui .parameters, #swagger-ui .opblock-section-header { background:#0f1722; border-color:#30363d; }
-      #swagger-ui .response-col_description__inner, #swagger-ui .model, #swagger-ui table thead tr th, #swagger-ui table tbody tr td { color:#e6edf3; border-color:#30363d; }
-      #swagger-ui .btn, #swagger-ui .btn:hover { background:#1f6feb; color:#fff; border-color:#1f6feb; }
-      #swagger-ui .model-title, #swagger-ui .prop-format, #swagger-ui .prop-type { color:#9aa4ae; }
-      #swagger-ui .copy-to-clipboard { background:#0b0f14; color:#e6edf3; border-color:#30363d; }
-      #swagger-ui .markdown code, #swagger-ui code { background:#0d1117; color:#c9d1d9; }
-      #swagger-ui .tab li { color:#e6edf3; }
     }
   </style>
   <script>
@@ -756,10 +1393,13 @@ header('Content-Type: text/html; charset=UTF-8');
   </div>
 
   <div id="panel-builder" class="tab-panel">
-  <form id="invoke_form" method="post" onsubmit="(function(){
+  <form method="post" onsubmit="(function(e){
+      // move ACE XML into hidden textarea
       const xmlEd = window.__xmlEditor; const xmlTa = document.getElementById('override_xml_textarea');
       if (xmlEd && xmlTa) xmlTa.value = xmlEd.getValue();
-    })();">
+      // use AJAX to invoke without page refresh
+      if (window.invokeSoapAjax) { e.preventDefault(); window.invokeSoapAjax(e); return false; }
+    })(event);">
     <input type="hidden" name="action" value="call" />
 
     <label>WSDL location (file path or URL)</label>
@@ -817,6 +1457,7 @@ header('Content-Type: text/html; charset=UTF-8');
     <label>Payload (JSON object)</label>
     <div id="payload_editor" style="height:220px;width:100%;border:1px solid #d0d7de;border-radius:6px;"></div>
     <textarea name="payload" id="payload_area" hidden><?= h($payloadJson) ?></textarea>
+    <div id="param_hints" class="muted" style="margin-top:6px"></div>
     <div style="margin:6px 0 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button id="btn_update_preview" type="button" class="secondary" onclick="window.updatePreviewSoap(true)">Update SOAP Preview</button>
       <span class="muted">Regenerates SOAP from JSON (forces overwrite of XML preview)</span>
@@ -836,8 +1477,7 @@ header('Content-Type: text/html; charset=UTF-8');
     <textarea id="override_xml_textarea" name="override_request_xml" hidden><?= h($overrideXml) ?></textarea>
 
     <div class="actions">
-      <button id="btn_invoke" type="submit">Invoke</button>
-      <span id="invoke_status" class="muted"></span>
+      <button type="submit">Invoke</button>
     </div>
   </form>
 
@@ -947,6 +1587,56 @@ header('Content-Type: text/html; charset=UTF-8');
     });
   }
 
+  // Auto-fill payload from spec on load if a function is preselected
+  window.addEventListener('DOMContentLoaded', function(){
+    if (window.autoTemplateFromSpec) window.autoTemplateFromSpec();
+  });
+
+  // AJAX invoke: submit form without reload and update panels
+  window.invokeSoapAjax = function(){
+    const formEl = document.querySelector('#panel-builder form');
+    if (!formEl) return;
+    const data = new FormData(formEl);
+    data.set('action', 'call');
+    const targetUrl = window.__SIM_SRC__ || (window.location && window.location.pathname) || window.location.href;
+    const invokeBtn = formEl.querySelector('button[type="submit"]');
+    if (invokeBtn){ try { invokeBtn.disabled = true; invokeBtn.textContent = 'Invoking...'; } catch(_) {} }
+    fetch(targetUrl, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+      body: data
+    })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(j => {
+      // Update headers
+      const setPre = (id, val, lang) => { const el = document.getElementById(id); if (!el) return; el.textContent = val || ''; if (lang){ el.classList.add('language-'+lang); if (window.hljs) window.hljs.highlightElement(el); } };
+      if (j && j.last){
+        setPre('req_headers_pre', j.last.request_headers || '', 'xml');
+        setPre('resp_headers_pre', j.last.response_headers || '', 'xml');
+        setPre('resp_xml_pre', j.last.response || '', 'xml');
+        try { window.__lastResponse = j.last.response || ''; } catch(_) {}
+      }
+      // Update parsed result panel
+      try {
+        const pre = document.getElementById('parsed_result_pre');
+        if (pre){ pre.textContent = JSON.stringify(j && j.result ? j.result : null, null, 2); if (window.hljs) window.hljs.highlightElement(pre); }
+      } catch(_){ }
+      // Show errors if any
+      try {
+        const errorsBox = document.querySelector('.panel.errors');
+        if (errorsBox){ errorsBox.innerHTML = ''; }
+        const errs = Array.isArray(j && j.errors) ? j.errors : [];
+        if (errs.length){
+          if (errorsBox){ errs.forEach(e => { const d = document.createElement('div'); d.textContent = String(e); errorsBox.appendChild(d); }); }
+        }
+      } catch(_){ }
+      // Re-format XML
+      if (typeof formatAndHighlight === 'function') formatAndHighlight();
+    })
+    .catch(err => { console.error('Invoke error', err); alert('Invoke failed: ' + err.message); })
+    .finally(() => { if (invokeBtn){ try { invokeBtn.disabled = false; invokeBtn.textContent = 'Invoke'; } catch(_) {} } });
+  };
+
   // Pretty-print XML safely (temporarily disabled to avoid formatting issues)
   function prettyXml(xml){
     return xml;
@@ -984,6 +1674,15 @@ header('Content-Type: text/html; charset=UTF-8');
     const sel = document.querySelector('select[name="function"]');
     const fn = sel && sel.value;
     if (!fn || !window.__openapiSpec) return;
+    // Prefer server-provided df examples if present
+    const ex = window.__openapiSpec['x-dfExamples'] && window.__openapiSpec['x-dfExamples'][fn];
+    if (ex){
+      const ta = document.querySelector('textarea[name="payload"]');
+      if (ta) { ta.value = JSON.stringify(ex, null, 2); }
+      updateParamHints(ex);
+      return;
+    }
+    // Fallback to deriving from requestBody schema
     const p = window.__openapiSpec.paths || {};
     const pathObj = p['/'+fn];
     if (!pathObj || !pathObj.post || !pathObj.post.requestBody) return;
@@ -992,12 +1691,33 @@ header('Content-Type: text/html; charset=UTF-8');
     const rbName = rb.replace('#/components/requestBodies/','');
     const rbObj = window.__openapiSpec.components && window.__openapiSpec.components.requestBodies && window.__openapiSpec.components.requestBodies[rbName];
     if (!rbObj) return;
-    const schema = (rbObj.content && (rbObj.content['application/json'] || rbObj.content['application/xml']))?.schema;
-    const tmpl = generateTemplateFromSchema(schema, window.__openapiSpec.components || {schemas:{}}, new Set());
+    const content = rbObj.content && (rbObj.content['application/json'] || rbObj.content['application/xml']);
+    if (!content || !content.schema) return;
+    const tmpl = generateTemplateFromSchema(content.schema, window.__openapiSpec.components || {});
     if (tmpl !== undefined){
       const ta = document.querySelector('textarea[name="payload"]');
       if (ta) ta.value = JSON.stringify(tmpl, null, 2);
+      updateParamHints(tmpl);
     }
+  }
+
+  function updateParamHints(obj){
+    try {
+      const el = document.getElementById('param_hints');
+      if (!el) return;
+      const keys = Object.keys(obj || {});
+      // If single root with nested object, show its keys instead for clarity
+      let top = obj;
+      if (keys.length === 1 && typeof obj[keys[0]] === 'object' && obj[keys[0]] !== null){
+        top = obj[keys[0]];
+      }
+      const fields = Object.keys(top || {});
+      if (fields.length){
+        el.textContent = 'Parameters: ' + fields.join(', ');
+      } else {
+        el.textContent = '';
+      }
+    } catch(_){}
   }
   window.autoTemplateFromSpec = function(){
     generateTemplate();
@@ -1046,67 +1766,6 @@ header('Content-Type: text/html; charset=UTF-8');
       }
     }
   })();
-
-  // Intercept Invoke submit to perform partial refresh via fetch
-  window.addEventListener('DOMContentLoaded', function(){
-    const form = document.getElementById('invoke_form');
-    if (!form) return;
-    form.addEventListener('submit', function(ev){
-      try { ev.preventDefault(); } catch(_) {}
-      // Ensure override XML textarea is synced (inline onsubmit already does this)
-      const btn = document.getElementById('btn_invoke');
-      const statusEl = document.getElementById('invoke_status');
-      if (btn){ btn.disabled = true; btn.textContent = 'Invoking...'; }
-      if (statusEl){ statusEl.textContent = ''; }
-      // Build FormData
-      const fd = new FormData(form);
-      // Keep payload editor in sync
-      try {
-        const ta = document.getElementById('payload_area');
-        if (window.__payloadEditor && ta){
-          const v = window.__payloadEditor.getValue();
-          ta.value = v;
-          fd.set('payload', v);
-        }
-      } catch(_) {}
-      // Ensure action
-      if (!fd.get('action')) fd.set('action','call');
-      const targetUrl = window.__SIM_SRC__ || (window.location && window.location.pathname) || window.location.href;
-      fetch(targetUrl, {
-        method: 'POST',
-        body: fd,
-        headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' }
-      })
-      .then(r=>{
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const ct = r.headers.get('content-type')||'';
-        if (!ct.includes('application/json')) return r.text().then(t=>{ throw new Error('Non-JSON response: '+t.slice(0,200)); });
-        return r.json();
-      })
-      .then(j=>{
-        const last = (j && j.last) || {};
-        const result = (j && j.result) || null;
-        // Update frames
-        const setText = (id, val)=>{ const el = document.getElementById(id); if (el){ el.textContent = val || ''; } };
-        setText('req_headers_pre', last.request_headers || '');
-        setText('resp_headers_pre', last.response_headers || '');
-        setText('resp_xml_pre', last.response || '');
-        setText('parsed_result_pre', (result!=null ? JSON.stringify(result, null, 2) : 'null'));
-        // cache last response for copy
-        window.__lastResponse = last.response || '';
-        // pretty/rehighlight
-        try { if (typeof formatAndHighlight === 'function') formatAndHighlight(); } catch(_) {}
-        if (statusEl){ statusEl.textContent = (j && j.ok) ? 'Done' : 'Completed with errors'; }
-      })
-      .catch(err=>{
-        console.error('[Invoke]', err);
-        if (statusEl){ statusEl.textContent = 'Invoke error – see console'; }
-      })
-      .finally(()=>{
-        if (btn){ btn.disabled = false; btn.textContent = 'Invoke'; }
-      });
-    });
-  });
 
   // Initialize ACE editor for XML override
   (function(){
