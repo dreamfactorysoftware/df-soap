@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
+### Added
+- Refactored WSDL parsing to use DOM for more accurate schema and type discovery.
+- Enhanced developer tools (`simulator.php`, `compare.php`) with new features and improved UI.
+
+### Changed
+- Moved developer tools to a `tools/` directory.
 ## [0.14.1] - 2018-02-25
 ### Added
 - Support for anySimpleType and others
