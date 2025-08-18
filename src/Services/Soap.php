@@ -40,10 +40,6 @@ class Soap extends BaseRestService
      */
     protected $client;
     /**
-     * @var \DOMDocument
-     */
-    protected $dom;
-    /**
      * @type bool
      */
     protected $cacheEnabled = false;
@@ -119,59 +115,90 @@ class Soap extends BaseRestService
 
         try {
             $this->client = new SoapClient($this->wsdl, $options);
-//            $this->dom = new \DOMDocument();
-//            if (!empty($this->wsdl)) {
-//                $this->dom->load($this->wsdl);
-//                $this->dom->preserveWhiteSpace = false;
-//            }
-            $queries = Request::query();
-            $headers = Arr::get($config, 'headers');
-            $wsseUsernameToken = Arr::get($config, 'wsse_username_token');
-            $soapHeaders = null;
-
-            if (!empty($headers)) {
-                foreach ($headers as $header) {
-                    $headerType = Arr::get($header, 'type', 'generic');
-                    switch ($headerType) {
-                        case 'wsse':
-                            $data = (is_null($header) || !is_array($header)) ? [] : $header;
-
-                            if (Arr::get($data, 'name') == 'username'){
-                                $username = Arr::get($data, 'data');
-                            } elseif (Arr::get($data, 'name') == 'password'){
-                                $password = Arr::get($data, 'data');
-                            }
-
-                            if (!empty($username) && !empty($password)) {
-                                    $soapHeaders[] = new WsseAuthHeader($username, $password, $wsseUsernameToken);
-                            }
-
-                            break;
-                        default:
-                            $data = Arr::get($header, 'data', '{}');
-                            if (Str::contains($data, 'df:')) {
-                                $param = Str::after($data, 'df:');
-                                $data = $queries[$param] ?? '';
-                            } else {
-                                $data = json_decode(stripslashes($data), true);
-                                $data = (is_null($data) || !is_array($data)) ? [] : $data;
-                            }
-                            $namespace = Arr::get($header, 'namespace');
-                            $name = Arr::get($header, 'name');
-                            $mustUnderstand = Arr::get($header, 'mustunderstand', false);
-                            $actor = Arr::get($header, 'actor');
-
-                            if (!empty($namespace) && !empty($name) && !empty($data)) {
-                                $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
-                            }
-                    }
-                }
-                if (!empty($soapHeaders)) {
-                    $this->client->__setSoapHeaders($soapHeaders);
-                }
-            }
+            $this->setupSoapHeaders($config);
         } catch (\Exception $ex) {
             throw new InternalServerErrorException("Unexpected SOAP Service Exception:\n{$ex->getMessage()}");
+        }
+    }
+    
+    /**
+     * Setup SOAP headers from configuration
+     * 
+     * @param array $config The service configuration
+     */
+    protected function setupSoapHeaders($config)
+    {
+        $queries = Request::query();
+        $headers = Arr::get($config, 'headers');
+        $wsseUsernameToken = Arr::get($config, 'wsse_username_token');
+        $soapHeaders = null;
+
+        if (!empty($headers)) {
+            foreach ($headers as $header) {
+                $headerType = Arr::get($header, 'type', 'generic');
+                switch ($headerType) {
+                    case 'wsse':
+                        $this->processWsseHeader($header, $wsseUsernameToken, $soapHeaders);
+                        break;
+                    default:
+                        $this->processGenericHeader($header, $queries, $soapHeaders);
+                }
+            }
+            if (!empty($soapHeaders)) {
+                $this->client->__setSoapHeaders($soapHeaders);
+            }
+        }
+    }
+    
+    /**
+     * Process WSSE authentication header
+     * 
+     * @param array $header The header configuration
+     * @param string $wsseUsernameToken The WSSE username token
+     * @param array $soapHeaders The SOAP headers array
+     */
+    protected function processWsseHeader($header, $wsseUsernameToken, &$soapHeaders)
+    {
+        $data = (is_null($header) || !is_array($header)) ? [] : $header;
+        $username = null;
+        $password = null;
+
+        if (Arr::get($data, 'name') == 'username') {
+            $username = Arr::get($data, 'data');
+        } elseif (Arr::get($data, 'name') == 'password') {
+            $password = Arr::get($data, 'data');
+        }
+
+        if (!empty($username) && !empty($password)) {
+            $soapHeaders[] = new WsseAuthHeader($username, $password, $wsseUsernameToken);
+        }
+    }
+    
+    /**
+     * Process generic SOAP header
+     * 
+     * @param array $header The header configuration
+     * @param array $queries The request queries
+     * @param array $soapHeaders The SOAP headers array
+     */
+    protected function processGenericHeader($header, $queries, &$soapHeaders)
+    {
+        $data = Arr::get($header, 'data', '{}');
+        if (Str::contains($data, 'df:')) {
+            $param = Str::after($data, 'df:');
+            $data = $queries[$param] ?? '';
+        } else {
+            $data = json_decode(stripslashes($data), true);
+            $data = (is_null($data) || !is_array($data)) ? [] : $data;
+        }
+        
+        $namespace = Arr::get($header, 'namespace');
+        $name = Arr::get($header, 'name');
+        $mustUnderstand = Arr::get($header, 'mustunderstand', false);
+        $actor = Arr::get($header, 'actor');
+
+        if (!empty($namespace) && !empty($name) && !empty($data)) {
+            $soapHeaders[] = new \SoapHeader($namespace, $name, $data, $mustUnderstand, $actor);
         }
     }
 
@@ -221,6 +248,163 @@ class Soap extends BaseRestService
     }
 
     /**
+     * Parse WSDL to get minOccurs information for fields
+     * 
+     * @return array Array of required fields by type name
+     */
+    protected function parseWsdlForRequiredFields()
+    {
+        $requiredFields = [];
+        
+        if (empty($this->wsdl)) {
+            return $requiredFields;
+        }
+        
+        try {
+            $xmlContent = $this->loadWsdlContent($this->wsdl);
+            $dom = $this->createDomDocument($xmlContent);
+            
+            // Find all complexType elements
+            $complexTypes = $dom->getElementsByTagName('complexType');
+            
+            foreach ($complexTypes as $complexType) {
+                $typeName = $complexType->getAttribute('name');
+                if (empty($typeName)) continue;
+                
+                $required = $this->extractRequiredFieldsFromComplexType($complexType);
+                
+                if (!empty($required)) {
+                    $requiredFields[$typeName] = $required;
+                }
+            }
+            
+            // Also check for imported WSDL files
+            $wsdlImports = $dom->getElementsByTagName('wsdl:import');
+            
+            foreach ($wsdlImports as $wsdlImport) {
+                $location = $wsdlImport->getAttribute('location');
+                if (!empty($location)) {
+                    $importedRequired = $this->parseImportedWsdl($location);
+                    $requiredFields = array_merge($requiredFields, $importedRequired);
+                }
+            }
+            
+            // Also check for import elements that might be WSDL imports
+            $allImports = $dom->getElementsByTagName('import');
+            
+            foreach ($allImports as $import) {
+                $location = $import->getAttribute('location');
+                $namespace = $import->getAttribute('namespace');
+                $schemaLocation = $import->getAttribute('schemaLocation');
+                
+                // If it has a location attribute and ends with wsdl=wsdl0, it's a WSDL import
+                if (!empty($location) && strpos($location, 'wsdl=wsdl0') !== false) {
+                    $importedRequired = $this->parseImportedWsdl($location);
+                    $requiredFields = array_merge($requiredFields, $importedRequired);
+                }
+                // If it has a schemaLocation, it's an XSD import
+                elseif (!empty($schemaLocation)) {
+                    $importedRequired = $this->parseImportedSchema($schemaLocation);
+                    $requiredFields = array_merge($requiredFields, $importedRequired);
+                }
+            }
+            
+        } catch (\Exception $e) {
+            // Log error but don't fail
+            \Log::warning('Failed to parse WSDL for required fields: ' . $e->getMessage());
+        }
+        
+        return $requiredFields;
+    }
+    
+    /**
+     * Extract required fields from a complexType element
+     * 
+     * @param \DOMElement $complexType The complexType element
+     * @return array Array of required field names
+     */
+    protected function extractRequiredFieldsFromComplexType($complexType)
+    {
+        $required = [];
+        
+        // Look for sequence elements
+        $sequences = $complexType->getElementsByTagName('sequence');
+        foreach ($sequences as $sequence) {
+            $elements = $sequence->getElementsByTagName('element');
+            foreach ($elements as $element) {
+                $elementName = $element->getAttribute('name');
+                $minOccurs = $element->getAttribute('minOccurs');
+                
+                if (!empty($elementName)) {
+                    // If minOccurs is not specified or is "1", field is required
+                    // getAttribute() returns empty string when attribute doesn't exist
+                    $isRequired = false;
+                    
+                    if (strlen($minOccurs) === 0) {
+                        // minOccurs not set, default is 1 (required)
+                        $isRequired = true;
+                    } elseif ($minOccurs === '1') {
+                        // minOccurs explicitly set to 1 (required)
+                        $isRequired = true;
+                    } elseif ($minOccurs === '0') {
+                        // minOccurs explicitly set to 0 (optional)
+                        $isRequired = false;
+                    } else {
+                        // Any other value, check if it's numeric and greater than 0
+                        if (is_numeric($minOccurs) && intval($minOccurs) > 0) {
+                            $isRequired = true;
+                        } else {
+                            $isRequired = false;
+                        }
+                    }
+                    
+                    if ($isRequired) {
+                        $required[] = $elementName;
+                    }
+                }
+            }
+        }
+        
+        return $required;
+    }
+    
+    /**
+     * Parse an imported XSD schema for required fields
+     * 
+     * @param string $schemaLocation URL to the schema
+     * @return array Array of required fields by type name
+     */
+    protected function parseImportedSchema($schemaLocation)
+    {
+        $requiredFields = [];
+        
+        try {
+            $xmlContent = $this->loadWsdlContent($schemaLocation);
+            $dom = $this->createDomDocument($xmlContent);
+            
+            // Find all complexType elements
+            $complexTypes = $dom->getElementsByTagName('complexType');
+            
+            foreach ($complexTypes as $complexType) {
+                $typeName = $complexType->getAttribute('name');
+                if (empty($typeName)) continue;
+                
+                $required = $this->extractRequiredFieldsFromComplexType($complexType);
+                
+                if (!empty($required)) {
+                    $requiredFields[$typeName] = $required;
+                }
+            }
+            
+        } catch (\Exception $e) {
+            // Log error but don't fail
+            \Log::warning('Failed to parse imported schema ' . $schemaLocation . ': ' . $e->getMessage());
+        }
+        
+        return $requiredFields;
+    }
+
+    /**
      * @param bool $refresh
      *
      * @return FunctionSchema[]
@@ -232,7 +416,12 @@ class Soap extends BaseRestService
                 (null === $this->types = $this->getFromCache('types')))
         ) {
             $types = $this->client->__getTypes();
-            // first pass, build name-value pairs for easier lookups
+            
+            // Parse WSDL to get required field information and inheritance chains
+            $requiredFieldsByType = $this->parseWsdlForRequiredFields();
+            $inheritanceMap = $this->parseWsdlForInheritance();
+            
+            // First pass: Build all structures without inheritance
             $structures = [];
             foreach ($types as $type) {
                 if (0 === substr_compare($type, 'struct ', 0, 7)) {
@@ -246,14 +435,32 @@ class Soap extends BaseRestService
                         $structures[$name] = [$type];
                     } else {
                         $parameters = [];
+                        $required = [];
                         foreach (explode(';', $type) as $param) {
-                            // declared as "type data_type"
-                            $parts = explode(' ', trim($param));
-                            if (count($parts) > 1) {
-                                $parameters[trim($parts[1])] = trim($parts[0]);
+                            $param = trim($param);
+                            if (empty($param)) continue;
+                            
+                            // Parse field definition
+                            // Format from __getTypes(): "type field_name"
+                            $parts = explode(' ', $param);
+                            if (count($parts) >= 2) {
+                                $fieldType = trim($parts[0]);
+                                $fieldName = trim($parts[1]);
+                                
+                                $parameters[$fieldName] = $fieldType;
+                                
+                                // Check if this field is required based on WSDL parsing
+                                if (isset($requiredFieldsByType[$name]) && 
+                                    in_array($fieldName, $requiredFieldsByType[$name])) {
+                                    $required[] = $fieldName;
+                                }
                             }
                         }
-                        $structures[$name] = $parameters;
+                        
+                        $structures[$name] = [
+                            'properties' => $parameters,
+                            'required' => $required
+                        ];
                     }
                 } else {
                     // declared as "type data_type"
@@ -263,9 +470,37 @@ class Soap extends BaseRestService
                     }
                 }
             }
+            
+            // Second pass: Apply inheritance to all types
+            $this->applyInheritanceToStructures($structures, $inheritanceMap, $requiredFieldsByType);
+            
+            // Third pass: Convert to OpenAPI format
             foreach ($structures as $name => &$type) {
                 if (is_array($type)) {
-                    if ((1 === count($type)) && isset($type[0])) {
+                    if (isset($type['properties'])) {
+                        // This is a struct with properties and required fields
+                        $properties = $type['properties'];
+                        $required = $type['required'] ?? [];
+                        
+                        foreach ($properties as $fieldName => &$fieldType) {
+                            if (array_key_exists($fieldType, $structures)) {
+                                $fieldType = ['$ref' => '#/components/schemas/' . $fieldType];
+                            } else {
+                                // convert simple types to swagger types
+                                $newType = static::soapType2ApiDocType($fieldType);
+                                $fieldType = $newType;
+                            }
+                        }
+                        
+                        $type = [
+                            'type' => 'object', 
+                            'properties' => $properties
+                        ];
+                        
+                        if (!empty($required)) {
+                            $type['required'] = $required;
+                        }
+                    } elseif ((1 === count($type)) && isset($type[0])) {
                         $type = $type[0];
                         // array of type
                         if (array_key_exists($type, $structures)) {
@@ -276,7 +511,7 @@ class Soap extends BaseRestService
                             $type = ['type' => 'array', 'items' => $newType];
                         }
                     } else {
-                        // array of field definitions
+                        // Legacy array of field definitions (fallback)
                         foreach ($type as $fieldName => &$fieldType) {
                             if (array_key_exists($fieldType, $structures)) {
                                 $fieldType = ['$ref' => '#/components/schemas/' . $fieldType];
@@ -305,6 +540,565 @@ class Soap extends BaseRestService
         }
 
         return $this->types;
+    }
+    
+    /**
+     * Apply inheritance to all structures in the correct order
+     * 
+     * @param array $structures The structures to apply inheritance to
+     * @param array $inheritanceMap The inheritance relationships
+     * @param array $requiredFieldsByType Required fields by type
+     */
+    protected function applyInheritanceToStructures(&$structures, $inheritanceMap, $requiredFieldsByType)
+    {
+        // Sort inheritance map by dependency order (base types first)
+        $sortedInheritance = $this->sortInheritanceByDependency($inheritanceMap);
+        
+        // Apply inheritance in dependency order
+        foreach ($sortedInheritance as $normalizedTypeName => $normalizedBaseTypeName) {
+            // Find the original type name (not normalized)
+            $originalTypeName = $this->findOriginalTypeName($normalizedTypeName, $structures);
+            $originalBaseTypeName = $this->findOriginalTypeName($normalizedBaseTypeName, $structures);
+            
+            if ($originalTypeName && $originalBaseTypeName) {
+                $this->applyInheritanceToType($structures, $originalTypeName, $originalBaseTypeName, $requiredFieldsByType);
+            }
+        }
+        
+        // Handle empty types with inheritance
+        foreach ($inheritanceMap as $normalizedTypeName => $normalizedBaseTypeName) {
+            $originalTypeName = $this->findOriginalTypeName($normalizedTypeName, $structures);
+            $originalBaseTypeName = $this->findOriginalTypeName($normalizedBaseTypeName, $structures);
+            
+            if ($originalTypeName && $originalBaseTypeName && 
+                !isset($structures[$originalTypeName]['properties']) && 
+                isset($structures[$originalBaseTypeName]['properties'])) {
+                
+                // This type exists but doesn't have properties yet (empty type with inheritance)
+                $inheritedFields = $structures[$originalBaseTypeName]['properties'];
+                $inheritedRequired = $structures[$originalBaseTypeName]['required'] ?? [];
+                
+                $structures[$originalTypeName] = [
+                    'properties' => $inheritedFields,
+                    'required' => $inheritedRequired
+                ];
+            }
+        }
+    }
+    
+    /**
+     * Sort inheritance map by dependency order (base types first)
+     * 
+     * @param array $inheritanceMap The inheritance relationships
+     * @return array Sorted inheritance map
+     */
+    protected function sortInheritanceByDependency($inheritanceMap)
+    {
+        $sorted = [];
+        $visited = [];
+        
+        foreach ($inheritanceMap as $type => $base) {
+            $this->topologicalSort($type, $inheritanceMap, $sorted, $visited);
+        }
+        
+        return $sorted;
+    }
+    
+    /**
+     * Topological sort for inheritance dependencies
+     * 
+     * @param string $type The type to process
+     * @param array $inheritanceMap The inheritance relationships
+     * @param array $sorted The sorted result
+     * @param array $visited Visited nodes
+     */
+    protected function topologicalSort($type, $inheritanceMap, &$sorted, &$visited)
+    {
+        if (isset($visited[$type])) {
+            return;
+        }
+        
+        $visited[$type] = true;
+        
+        if (isset($inheritanceMap[$type])) {
+            $this->topologicalSort($inheritanceMap[$type], $inheritanceMap, $sorted, $visited);
+        }
+        
+        $sorted[$type] = $inheritanceMap[$type] ?? null;
+    }
+    
+    /**
+     * Find the original type name from normalized name
+     * 
+     * @param string $normalizedTypeName The normalized type name
+     * @param array $structures The structures to search in
+     * @return string|null The original type name or null if not found
+     */
+    protected function findOriginalTypeName($normalizedTypeName, $structures)
+    {
+        foreach (array_keys($structures) as $structureName) {
+            if ($this->normalizeTypeName($structureName) === $normalizedTypeName) {
+                return $structureName;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Apply inheritance to a specific type
+     * 
+     * @param array $structures The structures
+     * @param string $typeName The type name
+     * @param string $baseTypeName The base type name
+     * @param array $requiredFieldsByType Required fields by type
+     */
+    protected function applyInheritanceToType(&$structures, $typeName, $baseTypeName, $requiredFieldsByType)
+    {
+        if (!isset($structures[$baseTypeName]['properties'])) {
+            return; // Base type doesn't have properties
+        }
+        
+        $baseProperties = $structures[$baseTypeName]['properties'];
+        $baseRequired = $structures[$baseTypeName]['required'] ?? [];
+        
+        // Get current properties and required fields
+        $currentProperties = $structures[$typeName]['properties'] ?? [];
+        $currentRequired = $structures[$typeName]['required'] ?? [];
+        
+        // Merge properties (current properties override inherited ones)
+        $mergedProperties = array_merge($baseProperties, $currentProperties);
+        
+        // Merge required fields
+        $mergedRequired = array_merge($baseRequired, $currentRequired);
+        
+        // Update the structure
+        $structures[$typeName] = [
+            'properties' => $mergedProperties,
+            'required' => array_unique($mergedRequired)
+        ];
+    }
+    
+    /**
+     * Parse WSDL to get inheritance relationships
+     * 
+     * @return array Array of inheritance relationships by type name
+     */
+    protected function parseWsdlForInheritance()
+    {
+        $inheritanceMap = [];
+        
+        if (empty($this->wsdl)) {
+            return $inheritanceMap;
+        }
+        
+        try {
+            $xmlContent = $this->loadWsdlContent($this->wsdl);
+            $dom = $this->createDomDocument($xmlContent);
+            
+            // Find all complexType elements
+            $complexTypes = $dom->getElementsByTagName('complexType');
+            
+            foreach ($complexTypes as $complexType) {
+                $typeName = $complexType->getAttribute('name');
+                if (empty($typeName)) continue;
+                
+                $this->extractInheritanceFromComplexType($complexType, $typeName, $inheritanceMap);
+            }
+            
+            // Also check for imported WSDL files
+            $imports = $dom->getElementsByTagName('import');
+            foreach ($imports as $import) {
+                $schemaLocation = $import->getAttribute('schemaLocation');
+                if (!empty($schemaLocation)) {
+                    $importedInheritance = $this->parseImportedSchemaForInheritance($schemaLocation);
+                    $inheritanceMap = array_merge($inheritanceMap, $importedInheritance);
+                }
+            }
+            
+            // Also check for WSDL imports
+            $wsdlImports = $dom->getElementsByTagName('wsdl:import');
+            
+            foreach ($wsdlImports as $wsdlImport) {
+                $location = $wsdlImport->getAttribute('location');
+                if (!empty($location)) {
+                    $importedInheritance = $this->parseImportedWsdlForInheritance($location);
+                    $inheritanceMap = array_merge($inheritanceMap, $importedInheritance);
+                }
+            }
+            
+            // Also check for import elements that might be WSDL imports
+            $allImports = $dom->getElementsByTagName('import');
+            
+            foreach ($allImports as $import) {
+                $location = $import->getAttribute('location');
+                $namespace = $import->getAttribute('namespace');
+                $schemaLocation = $import->getAttribute('schemaLocation');
+                
+                // If it has a location attribute and ends with wsdl=wsdl0, it's a WSDL import
+                if (!empty($location) && strpos($location, 'wsdl=wsdl0') !== false) {
+                    $importedInheritance = $this->parseImportedWsdlForInheritance($location);
+                    $inheritanceMap = array_merge($inheritanceMap, $importedInheritance);
+                }
+                // If it has a schemaLocation, it's an XSD import
+                elseif (!empty($schemaLocation)) {
+                    $importedInheritance = $this->parseImportedSchemaForInheritance($schemaLocation);
+                    $inheritanceMap = array_merge($inheritanceMap, $importedInheritance);
+                }
+            }
+            
+        } catch (\Exception $e) {
+            // Log error but don't fail
+            \Log::warning('Failed to parse WSDL for inheritance: ' . $e->getMessage());
+        }
+        
+        return $inheritanceMap;
+    }
+    
+    /**
+     * Extract inheritance information from a complexType element
+     * 
+     * @param \DOMElement $complexType The complexType element
+     * @param string $typeName The type name
+     * @param array $inheritanceMap The inheritance map to update
+     */
+    protected function extractInheritanceFromComplexType($complexType, $typeName, &$inheritanceMap)
+    {
+        // Look for complexContent with extension
+        $complexContents = $complexType->getElementsByTagName('complexContent');
+        foreach ($complexContents as $complexContent) {
+            $extensions = $complexContent->getElementsByTagName('extension');
+            foreach ($extensions as $extension) {
+                $base = $extension->getAttribute('base');
+                if (!empty($base)) {
+                    // Extract the base type name (remove namespace prefix if present)
+                    $baseTypeName = $base;
+                    if (strpos($base, ':') !== false) {
+                        $baseTypeName = substr($base, strrpos($base, ':') + 1);
+                    }
+                    
+                    // Normalize type names to match PHP SOAP client output
+                    // Remove "Input." prefix and other common prefixes
+                    $normalizedTypeName = $this->normalizeTypeName($typeName);
+                    $normalizedBaseTypeName = $this->normalizeTypeName($baseTypeName);
+                    
+                    $inheritanceMap[$normalizedTypeName] = $normalizedBaseTypeName;
+                }
+            }
+        }
+    }
+    
+    /**
+     * Parse an imported schema for inheritance relationships
+     * 
+     * @param string $schemaLocation URL to the schema
+     * @return array Array of inheritance relationships by type name
+     */
+    protected function parseImportedSchemaForInheritance($schemaLocation)
+    {
+        $inheritanceMap = [];
+        
+        try {
+            $dom = new \DOMDocument();
+            
+            // Load schema from URL
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 30,
+                    'user_agent' => 'DreamFactory SOAP Client'
+                ]
+            ]);
+            
+            $xmlContent = file_get_contents($schemaLocation, false, $context);
+            if ($xmlContent === false) {
+                throw new \Exception('Failed to load schema from URL: ' . $schemaLocation);
+            }
+            
+            $dom->loadXML($xmlContent, LIBXML_NONET);
+            $dom->preserveWhiteSpace = false;
+            
+            // Find all complexType elements
+            $complexTypes = $dom->getElementsByTagName('complexType');
+            
+            foreach ($complexTypes as $complexType) {
+                $typeName = $complexType->getAttribute('name');
+                if (empty($typeName)) continue;
+                
+                // Look for complexContent with extension
+                $complexContents = $complexType->getElementsByTagName('complexContent');
+                foreach ($complexContents as $complexContent) {
+                    $extensions = $complexContent->getElementsByTagName('extension');
+                    foreach ($extensions as $extension) {
+                        $base = $extension->getAttribute('base');
+                        if (!empty($base)) {
+                            // Extract the base type name (remove namespace prefix if present)
+                            $baseTypeName = $base;
+                            if (strpos($base, ':') !== false) {
+                                $baseTypeName = substr($base, strrpos($base, ':') + 1);
+                            }
+                            
+                            // Normalize type names to match PHP SOAP client output
+                            $normalizedTypeName = $this->normalizeTypeName($typeName);
+                            $normalizedBaseTypeName = $this->normalizeTypeName($baseTypeName);
+                            
+                            $inheritanceMap[$normalizedTypeName] = $normalizedBaseTypeName;
+                        }
+                    }
+                }
+            }
+            
+        } catch (\Exception $e) {
+            // Log error but don't fail
+            \Log::warning('Failed to parse imported schema ' . $schemaLocation . ' for inheritance: ' . $e->getMessage());
+        }
+        
+        return $inheritanceMap;
+    }
+    
+    /**
+     * Parse an imported WSDL file for inheritance relationships
+     * 
+     * @param string $wsdlLocation URL to the WSDL
+     * @return array Array of inheritance relationships by type name
+     */
+    protected function parseImportedWsdlForInheritance($wsdlLocation)
+    {
+        $inheritanceMap = [];
+        
+        try {
+            $dom = new \DOMDocument();
+            
+            // Load WSDL from URL
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 30,
+                    'user_agent' => 'DreamFactory SOAP Client'
+                ]
+            ]);
+            
+            $xmlContent = file_get_contents($wsdlLocation, false, $context);
+            if ($xmlContent === false) {
+                throw new \Exception('Failed to load WSDL from URL: ' . $wsdlLocation);
+            }
+            
+            $dom->loadXML($xmlContent, LIBXML_NONET);
+            $dom->preserveWhiteSpace = false;
+            
+            // Find all complexType elements in the imported WSDL
+            $complexTypes = $dom->getElementsByTagName('complexType');
+            
+            foreach ($complexTypes as $complexType) {
+                $typeName = $complexType->getAttribute('name');
+                if (empty($typeName)) continue;
+                
+                // Look for complexContent with extension
+                $complexContents = $complexType->getElementsByTagName('complexContent');
+                foreach ($complexContents as $complexContent) {
+                    $extensions = $complexContent->getElementsByTagName('extension');
+                    foreach ($extensions as $extension) {
+                        $base = $extension->getAttribute('base');
+                        if (!empty($base)) {
+                            // Extract the base type name (remove namespace prefix if present)
+                            $baseTypeName = $base;
+                            if (strpos($base, ':') !== false) {
+                                $baseTypeName = substr($base, strrpos($base, ':') + 1);
+                            }
+                            
+                            // Normalize type names to match PHP SOAP client output
+                            $normalizedTypeName = $this->normalizeTypeName($typeName);
+                            $normalizedBaseTypeName = $this->normalizeTypeName($baseTypeName);
+                            
+                            $inheritanceMap[$normalizedTypeName] = $normalizedBaseTypeName;
+                        }
+                    }
+                }
+            }
+            
+            // Also check for nested imports in the imported WSDL
+            $imports = $dom->getElementsByTagName('import');
+            foreach ($imports as $import) {
+                $schemaLocation = $import->getAttribute('schemaLocation');
+                if (!empty($schemaLocation)) {
+                    $importedInheritance = $this->parseImportedSchemaForInheritance($schemaLocation);
+                    $inheritanceMap = array_merge($inheritanceMap, $importedInheritance);
+                }
+            }
+            
+            // Check for nested WSDL imports
+            $wsdlImports = $dom->getElementsByTagName('wsdl:import');
+            foreach ($wsdlImports as $wsdlImport) {
+                $nestedWsdlLocation = $wsdlImport->getAttribute('location');
+                if (!empty($nestedWsdlLocation)) {
+                    $importedInheritance = $this->parseImportedWsdlForInheritance($nestedWsdlLocation);
+                    $inheritanceMap = array_merge($inheritanceMap, $importedInheritance);
+                }
+            }
+            
+        } catch (\Exception $e) {
+            // Log error but don't fail
+            \Log::warning('Failed to parse imported WSDL ' . $wsdlLocation . ' for inheritance: ' . $e->getMessage());
+        }
+        
+        return $inheritanceMap;
+    }
+    
+    /**
+     * Parse an imported WSDL file for required fields
+     * 
+     * @param string $wsdlLocation URL to the WSDL
+     * @return array Array of required fields by type name
+     */
+    protected function parseImportedWsdl($wsdlLocation)
+    {
+        $requiredFields = [];
+        
+        try {
+            $dom = new \DOMDocument();
+            
+            // Load WSDL from URL
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 30,
+                    'user_agent' => 'DreamFactory SOAP Client'
+                ]
+            ]);
+            
+            $xmlContent = file_get_contents($wsdlLocation, false, $context);
+            if ($xmlContent === false) {
+                throw new \Exception('Failed to load WSDL from URL: ' . $wsdlLocation);
+            }
+            
+            $dom->loadXML($xmlContent, LIBXML_NONET);
+            $dom->preserveWhiteSpace = false;
+            
+            // Find all complexType elements in the imported WSDL
+            $complexTypes = $dom->getElementsByTagName('complexType');
+            
+            foreach ($complexTypes as $complexType) {
+                $typeName = $complexType->getAttribute('name');
+                if (empty($typeName)) continue;
+                
+                $required = [];
+                
+                // Look for sequence elements
+                $sequences = $complexType->getElementsByTagName('sequence');
+                foreach ($sequences as $sequence) {
+                    $elements = $sequence->getElementsByTagName('element');
+                    foreach ($elements as $element) {
+                        $elementName = $element->getAttribute('name');
+                        $minOccurs = $element->getAttribute('minOccurs');
+                        
+                        if (!empty($elementName)) {
+                            // If minOccurs is not specified or is "1", field is required
+                            // getAttribute() returns empty string when attribute doesn't exist
+                            $isRequired = false;
+                            
+                            if (strlen($minOccurs) === 0) {
+                                // minOccurs not set, default is 1 (required)
+                                $isRequired = true;
+                            } elseif ($minOccurs === '1') {
+                                // minOccurs explicitly set to 1 (required)
+                                $isRequired = true;
+                            } elseif ($minOccurs === '0') {
+                                // minOccurs explicitly set to 0 (optional)
+                                $isRequired = false;
+                            } else {
+                                // Any other value, check if it's numeric and greater than 0
+                                if (is_numeric($minOccurs) && intval($minOccurs) > 0) {
+                                    $isRequired = true;
+                                } else {
+                                    $isRequired = false;
+                                }
+                            }
+                            
+                            if ($isRequired) {
+                                $required[] = $elementName;
+                            }
+                        }
+                    }
+                }
+                
+                if (!empty($required)) {
+                    $requiredFields[$typeName] = $required;
+                }
+            }
+            
+            // Also check for nested imports in the imported WSDL
+            $imports = $dom->getElementsByTagName('import');
+            foreach ($imports as $import) {
+                $schemaLocation = $import->getAttribute('schemaLocation');
+                if (!empty($schemaLocation)) {
+                    $importedRequired = $this->parseImportedSchema($schemaLocation);
+                    $requiredFields = array_merge($requiredFields, $importedRequired);
+                }
+            }
+            
+            // Check for nested WSDL imports
+            $wsdlImports = $dom->getElementsByTagName('wsdl:import');
+            foreach ($wsdlImports as $wsdlImport) {
+                $nestedWsdlLocation = $wsdlImport->getAttribute('location');
+                if (!empty($nestedWsdlLocation)) {
+                    $importedRequired = $this->parseImportedWsdl($nestedWsdlLocation);
+                    $requiredFields = array_merge($requiredFields, $importedRequired);
+                }
+            }
+            
+        } catch (\Exception $e) {
+            // Log error but don't fail
+            \Log::warning('Failed to parse imported WSDL ' . $wsdlLocation . ': ' . $e->getMessage());
+        }
+        
+        return $requiredFields;
+    }
+    
+    /**
+     * Normalize type names to match PHP SOAP client output
+     * 
+     * @param string $name The type name to normalize
+     * @return string The normalized type name
+     */
+    protected function normalizeTypeName($name)
+    {
+        $name = strtolower($name);
+        $name = str_replace('input.', '', $name);
+        $name = str_replace('output.', '', $name);
+        $name = str_replace('request.', '', $name);
+        $name = str_replace('response.', '', $name);
+        $name = str_replace('result.', '', $name);
+        $name = str_replace('return.', '', $name);
+        $name = str_replace('param.', '', $name);
+        $name = str_replace('arg.', '', $name);
+        $name = str_replace('value.', '', $name);
+        $name = str_replace('item.', '', $name);
+        $name = str_replace('element.', '', $name);
+        $name = str_replace('complex.', '', $name);
+        $name = str_replace('sequence.', '', $name);
+        $name = str_replace('choice.', '', $name);
+        $name = str_replace('group.', '', $name);
+        $name = str_replace('all.', '', $name);
+        $name = str_replace('any.', '', $name);
+        $name = str_replace('attribute.', '', $name);
+        $name = str_replace('attributegroup.', '', $name);
+        $name = str_replace('extension.', '', $name);
+        $name = str_replace('restriction.', '', $name);
+        $name = str_replace('simpletype.', '', $name);
+        $name = str_replace('complextype.', '', $name);
+        $name = str_replace('schema.', '', $name);
+        $name = str_replace('types.', '', $name);
+        $name = str_replace('definitions.', '', $name);
+        $name = str_replace('namespace.', '', $name);
+        $name = str_replace('prefix.', '', $name);
+        $name = str_replace('local.', '', $name);
+        $name = str_replace('global.', '', $name);
+        $name = str_replace('targetnamespace.', '', $name);
+        $name = str_replace('schemalocation.', '', $name);
+        $name = str_replace('import.', '', $name);
+        $name = str_replace('wsdl:import.', '', $name);
+        $name = str_replace('soap:header.', '', $name);
+        $name = str_replace('soap:body.', '', $name);
+        $name = str_replace('soap:fault.', '', $name);
+        $name = str_replace('soap:envelope.', '', $name);
+        
+        return $name;
     }
 
     /**
@@ -832,5 +1626,43 @@ class Soap extends BaseRestService
         }
 
         return null;
+    }
+
+    /**
+     * Load WSDL content from URL
+     * 
+     * @param string $url The WSDL URL
+     * @return string The XML content
+     * @throws \Exception If loading fails
+     */
+    protected function loadWsdlContent($url)
+    {
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 30,
+                'user_agent' => 'DreamFactory SOAP Client'
+            ]
+        ]);
+        
+        $xmlContent = file_get_contents($url, false, $context);
+        if ($xmlContent === false) {
+            throw new \Exception('Failed to load WSDL from URL: ' . $url);
+        }
+        
+        return $xmlContent;
+    }
+    
+    /**
+     * Create DOMDocument from XML content
+     * 
+     * @param string $xmlContent The XML content
+     * @return \DOMDocument The DOM document
+     */
+    protected function createDomDocument($xmlContent)
+    {
+        $dom = new \DOMDocument();
+        $dom->loadXML($xmlContent, LIBXML_NONET);
+        $dom->preserveWhiteSpace = false;
+        return $dom;
     }
 }
