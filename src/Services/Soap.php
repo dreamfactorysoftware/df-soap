@@ -27,6 +27,39 @@ class Soap extends BaseRestService
 {
     use Cacheable;
 
+    /**
+     * Reject stream_context options that would disable TLS certificate
+     * verification on the WSDL fetch or SOAP request.
+     *
+     * Without this guard, an admin (or compromised admin account) could
+     * configure verify_peer=false / allow_self_signed=true and turn the
+     * outbound SOAP traffic into a MITM target.
+     *
+     * @throws \InvalidArgumentException
+     */
+    public static function assertSafeStreamContext(array $context): void
+    {
+        $ssl = $context['ssl'] ?? [];
+        if (!is_array($ssl)) {
+            return;
+        }
+        if (array_key_exists('verify_peer', $ssl) && $ssl['verify_peer'] === false) {
+            throw new \InvalidArgumentException(
+                'SOAP stream_context: ssl.verify_peer=false is not allowed.'
+            );
+        }
+        if (array_key_exists('verify_peer_name', $ssl) && $ssl['verify_peer_name'] === false) {
+            throw new \InvalidArgumentException(
+                'SOAP stream_context: ssl.verify_peer_name=false is not allowed.'
+            );
+        }
+        if (array_key_exists('allow_self_signed', $ssl) && $ssl['allow_self_signed'] === true) {
+            throw new \InvalidArgumentException(
+                'SOAP stream_context: ssl.allow_self_signed=true is not allowed.'
+            );
+        }
+    }
+
     //*************************************************************************
     //* Members
     //*************************************************************************
@@ -80,12 +113,27 @@ class Soap extends BaseRestService
                 throw new \InvalidArgumentException('SOAP Services require either a WSDL or both location and URI to be configured.');
             }
         } else {
-            if ((!str_contains($this->wsdl, '/')) && (!str_contains($this->wsdl, '\\'))) {
+            // SSRF: if the WSDL is a URL, validate scheme + host before
+            // SoapClient fetches it. SoapClient uses libxml under the hood
+            // which will follow http(s) URLs to load the WSDL document.
+            if (preg_match('#^https?://#i', $this->wsdl) === 1) {
+                \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($this->wsdl);
+            } elseif ((!str_contains($this->wsdl, '/')) && (!str_contains($this->wsdl, '\\'))) {
                 // no directories involved, store it where we want to store it
                 if (!empty($storage = storage_path('wsdl'))) {
                     $this->wsdl = rtrim($storage, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $this->wsdl;
                 }
             } elseif (false !== $path = realpath($this->wsdl)) {
+                // Reject symlink-traversal: the resolved path must stay
+                // inside storage_path('wsdl'). Without this, a symlink in
+                // the wsdl directory could redirect SoapClient to load a
+                // private file on disk.
+                $allowedRoot = realpath(storage_path('wsdl'));
+                if ($allowedRoot && !str_starts_with($path, $allowedRoot . DIRECTORY_SEPARATOR) && $path !== $allowedRoot) {
+                    throw new \InvalidArgumentException(
+                        'WSDL path resolves outside the allowed storage directory.'
+                    );
+                }
                 $this->wsdl = $path;
             }
         }
@@ -107,6 +155,11 @@ class Soap extends BaseRestService
                         if (!is_array($value)) {
                             throw new \InvalidArgumentException('SOAP Services stream_context must be a valid array (or JSON object) of parameters.');
                         }
+                        // Reject TLS-verification bypass options. Without
+                        // this an admin (or compromised admin account)
+                        // could disable certificate validation on WSDL
+                        // fetch and SOAP request, enabling MITM.
+                        self::assertSafeStreamContext($value);
                         $context = stream_context_create($value);
                         $options[$key] = $context;
                     }
