@@ -167,6 +167,15 @@ class Soap extends BaseRestService
             }
         }
 
+        // The 'location' option is the endpoint the SOAP request is sent to.
+        // In non-WSDL mode it fully determines the outbound target, and even
+        // with a WSDL it overrides the address from the document. Validate its
+        // scheme + host the same way the WSDL URL is validated above.
+        if (isset($options['location']) && is_string($options['location'])
+            && preg_match('#^https?://#i', $options['location']) === 1) {
+            \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($options['location']);
+        }
+
         $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
         $this->cacheTTL = intval(Arr::get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
 
