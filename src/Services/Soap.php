@@ -176,6 +176,13 @@ class Soap extends BaseRestService
             \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($options['location']);
         }
 
+        // 'proxy_host' routes the outbound SOAP request through an HTTP proxy.
+        // An internal address here is the same SSRF class as 'location', so
+        // validate it too. It is a bare host, so wrap it in a scheme first.
+        if (isset($options['proxy_host']) && is_string($options['proxy_host'])) {
+            \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl('http://' . $options['proxy_host']);
+        }
+
         $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
         $this->cacheTTL = intval(Arr::get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
 
