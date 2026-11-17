@@ -11,6 +11,8 @@ use DreamFactory\Core\Exceptions\NotFoundException;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
+use DreamFactory\Core\System\Components\ExternalUrlException;
+use DreamFactory\Core\System\Components\SsrfValidator;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use Illuminate\Support\Facades\Request;
 use Log;
@@ -63,22 +65,54 @@ class Soap extends BaseRestService
 
     /**
      * Check a WSDL, endpoint or proxy URL with the platform's outbound URL rules
-     * (the df-system external URL validator, which also honours the operator's
+     * (the df-system external URL validator, applying the operator's
      * DF_OUTBOUND_ALLOWED_HOSTS list) and word a refusal for SOAP. The rules and
-     * the 400 response are unchanged; only the message is SOAP-specific.
+     * the 400 response are unchanged; only the message is SOAP-specific:
+     *
+     *   "<subject> must be an http or https URL."   not an http(s) URL
+     *   "<subject> host is not valid."              an http(s) URL without a usable host
+     *   "<subject> host could not be resolved."     the host name did not resolve
+     *   "<subject> host is not allowed."            the address is not accepted
      *
      * @param string $url     The http(s) URL to check.
-     * @param string $subject What the URL is, e.g. "SOAP endpoint host".
+     * @param string $subject What the URL is: "SOAP WSDL", "SOAP endpoint" or "SOAP proxy".
      *
      * @throws BadRequestException
      */
     public static function assertAllowedOutboundUrl(string $url, string $subject): void
     {
         try {
-            \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($url);
+            SsrfValidator::validateExternalUrl($url, true);
         } catch (BadRequestException $e) {
-            throw new BadRequestException($subject . ' is not allowed.', null, $e);
+            throw new BadRequestException(static::outboundRefusalMessage($url, $subject, $e), null, $e);
         }
+    }
+
+    /**
+     * The SOAP-specific message for a refused WSDL, endpoint or proxy URL.
+     *
+     * @param string              $url
+     * @param string              $subject
+     * @param BadRequestException $e The validator's exception.
+     *
+     * @return string
+     */
+    protected static function outboundRefusalMessage(string $url, string $subject, BadRequestException $e): string
+    {
+        // ExternalUrlException carries the reason; an older df-system throws a
+        // plain BadRequestException, which keeps the general wording.
+        if ($e instanceof ExternalUrlException) {
+            switch ($e->getReason()) {
+                case ExternalUrlException::REASON_URL:
+                    return preg_match('#^https?://#i', $url) === 1
+                        ? $subject . ' host is not valid.'
+                        : $subject . ' must be an http or https URL.';
+                case ExternalUrlException::REASON_RESOLVE:
+                    return $subject . ' host could not be resolved.';
+            }
+        }
+
+        return $subject . ' host is not allowed.';
     }
 
     //*************************************************************************
@@ -138,7 +172,7 @@ class Soap extends BaseRestService
             // SoapClient fetches it. SoapClient uses libxml under the hood
             // which will follow http(s) URLs to load the WSDL document.
             if (preg_match('#^https?://#i', $this->wsdl) === 1) {
-                static::assertAllowedOutboundUrl($this->wsdl, 'SOAP WSDL host');
+                static::assertAllowedOutboundUrl($this->wsdl, 'SOAP WSDL');
             } elseif ((!str_contains($this->wsdl, '/')) && (!str_contains($this->wsdl, '\\'))) {
                 // no directories involved, store it where we want to store it
                 if (!empty($storage = storage_path('wsdl'))) {
@@ -194,14 +228,14 @@ class Soap extends BaseRestService
         // scheme + host the same way the WSDL URL is validated above.
         if (isset($options['location']) && is_string($options['location'])
             && preg_match('#^https?://#i', $options['location']) === 1) {
-            static::assertAllowedOutboundUrl($options['location'], 'SOAP endpoint host');
+            static::assertAllowedOutboundUrl($options['location'], 'SOAP endpoint');
         }
 
         // 'proxy_host' routes the outbound SOAP request through an HTTP proxy.
         // An internal address here is the same SSRF class as 'location', so
         // validate it too. It is a bare host, so wrap it in a scheme first.
         if (isset($options['proxy_host']) && is_string($options['proxy_host'])) {
-            static::assertAllowedOutboundUrl('http://' . $options['proxy_host'], 'SOAP proxy host');
+            static::assertAllowedOutboundUrl('http://' . $options['proxy_host'], 'SOAP proxy');
         }
 
         $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
