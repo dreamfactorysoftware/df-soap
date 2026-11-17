@@ -64,9 +64,9 @@ class SoapHardeningTest extends TestCase
         $contents = file_get_contents($sourcePath);
 
         $this->assertMatchesRegularExpression(
-            '/SsrfValidator::validateExternalUrl\s*\(\s*\$this->wsdl\s*\)/',
+            '/assertAllowedOutboundUrl\s*\(\s*\$this->wsdl\s*,/',
             $contents,
-            'WSDL URL must be passed through SsrfValidator before SoapClient fetches it.'
+            'WSDL URL must be checked before SoapClient fetches it.'
         );
     }
 
