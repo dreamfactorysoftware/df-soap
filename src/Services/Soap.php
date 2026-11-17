@@ -5,6 +5,7 @@ namespace DreamFactory\Core\Soap\Services;
 use DreamFactory\Core\Components\Cacheable;
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
+use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
 use DreamFactory\Core\Services\BaseRestService;
@@ -57,6 +58,26 @@ class Soap extends BaseRestService
             throw new \InvalidArgumentException(
                 'SOAP stream_context: ssl.allow_self_signed=true is not allowed.'
             );
+        }
+    }
+
+    /**
+     * Check a WSDL, endpoint or proxy URL with the platform's outbound URL rules
+     * (the df-system external URL validator, which also honours the operator's
+     * DF_OUTBOUND_ALLOWED_HOSTS list) and word a refusal for SOAP. The rules and
+     * the 400 response are unchanged; only the message is SOAP-specific.
+     *
+     * @param string $url     The http(s) URL to check.
+     * @param string $subject What the URL is, e.g. "SOAP endpoint host".
+     *
+     * @throws BadRequestException
+     */
+    public static function assertAllowedOutboundUrl(string $url, string $subject): void
+    {
+        try {
+            \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($url);
+        } catch (BadRequestException $e) {
+            throw new BadRequestException($subject . ' is not allowed.', null, $e);
         }
     }
 
@@ -117,7 +138,7 @@ class Soap extends BaseRestService
             // SoapClient fetches it. SoapClient uses libxml under the hood
             // which will follow http(s) URLs to load the WSDL document.
             if (preg_match('#^https?://#i', $this->wsdl) === 1) {
-                \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($this->wsdl);
+                static::assertAllowedOutboundUrl($this->wsdl, 'SOAP WSDL host');
             } elseif ((!str_contains($this->wsdl, '/')) && (!str_contains($this->wsdl, '\\'))) {
                 // no directories involved, store it where we want to store it
                 if (!empty($storage = storage_path('wsdl'))) {
@@ -173,14 +194,14 @@ class Soap extends BaseRestService
         // scheme + host the same way the WSDL URL is validated above.
         if (isset($options['location']) && is_string($options['location'])
             && preg_match('#^https?://#i', $options['location']) === 1) {
-            \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($options['location']);
+            static::assertAllowedOutboundUrl($options['location'], 'SOAP endpoint host');
         }
 
         // 'proxy_host' routes the outbound SOAP request through an HTTP proxy.
         // An internal address here is the same SSRF class as 'location', so
         // validate it too. It is a bare host, so wrap it in a scheme first.
         if (isset($options['proxy_host']) && is_string($options['proxy_host'])) {
-            \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl('http://' . $options['proxy_host']);
+            static::assertAllowedOutboundUrl('http://' . $options['proxy_host'], 'SOAP proxy host');
         }
 
         $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
