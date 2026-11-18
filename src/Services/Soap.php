@@ -115,6 +115,42 @@ class Soap extends BaseRestService
         return $subject . ' host is not allowed.';
     }
 
+    /**
+     * Add the options that turn off HTTP redirects to a stream context array.
+     * The 'http' options also apply to https URLs.
+     *
+     * @param array $context stream_context_create() options
+     *
+     * @return array
+     */
+    public static function withoutRedirects(array $context): array
+    {
+        $http = (isset($context['http']) && is_array($context['http'])) ? $context['http'] : [];
+        $http['follow_location'] = 0;
+        $http['max_redirects'] = 1;
+        $context['http'] = $http;
+
+        return $context;
+    }
+
+    /**
+     * The check run on each endpoint address before a SOAP request is sent.
+     *
+     * @param string|null $checkedLocation A configured 'location' that has
+     *                                     already been checked, or null.
+     *
+     * @return callable function (string $location): void
+     */
+    public static function endpointCheck(?string $checkedLocation): callable
+    {
+        return static function (string $location) use ($checkedLocation): void {
+            if (null !== $checkedLocation && $location === $checkedLocation) {
+                return;
+            }
+            static::assertAllowedOutboundUrl($location, 'SOAP endpoint');
+        };
+    }
+
     //*************************************************************************
     //* Members
     //*************************************************************************
@@ -215,20 +251,28 @@ class Soap extends BaseRestService
                         // could disable certificate validation on WSDL
                         // fetch and SOAP request, enabling MITM.
                         self::assertSafeStreamContext($value);
-                        $context = stream_context_create($value);
-                        $options[$key] = $context;
+                        $context = stream_context_create(static::withoutRedirects($value));
+                        unset($options[$key]);
+                        $options['stream_context'] = $context;
                     }
                 }
             }
+        }
+        // WSDL downloads and SOAP requests go to the configured or documented
+        // address only; HTTP redirects are not followed.
+        if (!isset($options['stream_context']) || !is_resource($options['stream_context'])) {
+            $options['stream_context'] = stream_context_create(static::withoutRedirects([]));
         }
 
         // The 'location' option is the endpoint the SOAP request is sent to.
         // In non-WSDL mode it fully determines the outbound target, and even
         // with a WSDL it overrides the address from the document. Validate its
         // scheme + host the same way the WSDL URL is validated above.
+        $checkedLocation = null;
         if (isset($options['location']) && is_string($options['location'])
             && preg_match('#^https?://#i', $options['location']) === 1) {
             static::assertAllowedOutboundUrl($options['location'], 'SOAP endpoint');
+            $checkedLocation = $options['location'];
         }
 
         // 'proxy_host' routes the outbound SOAP request through an HTTP proxy.
@@ -243,6 +287,9 @@ class Soap extends BaseRestService
 
         try {
             $this->client = new SoapClient($this->wsdl, $options);
+            // Without a 'location' option the endpoint address comes from the
+            // WSDL document; it gets the same outbound URL check before use.
+            $this->client->setLocationCheck(static::endpointCheck($checkedLocation));
 //            $this->dom = new \DOMDocument();
 //            if (!empty($this->wsdl)) {
 //                $this->dom->load($this->wsdl);
