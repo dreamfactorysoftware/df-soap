@@ -191,4 +191,130 @@ class SoapEndpointTest extends TestCase
         $client = new SoapClient('http://127.0.0.1:' . $this->port . '/service.wsdl', $this->options());
         $this->assertNotEmpty($client->__getFunctions());
     }
+
+    private function wsdlFault(string $url): \SoapFault
+    {
+        if (function_exists('http_clear_last_response_headers')) {
+            http_clear_last_response_headers();
+        }
+        try {
+            // PHP also reports the failed download as a warning; the fault is what is tested.
+            @new SoapClient($url, $this->options());
+        } catch (\SoapFault $e) {
+            return $e;
+        }
+        $this->fail("the WSDL at $url should not load");
+    }
+
+    public function testWsdlRedirectGivesClearBadRequest(): void
+    {
+        $this->startServer();
+        $fault = $this->wsdlFault('http://127.0.0.1:' . $this->port . '/moved-wsdl');
+        $this->assertTrue(Soap::isWsdlLoadFault($fault));
+
+        $status = Soap::lastWsdlResponseStatus();
+        if (PHP_VERSION_ID >= 80400) {
+            $this->assertSame(302, $status);
+        }
+        $e = Soap::wsdlLoadError($status, $fault);
+        $this->assertSame(400, $e->getStatusCode());
+        if (PHP_VERSION_ID >= 80400) {
+            $this->assertSame(
+                'SOAP WSDL address answered with a redirect (HTTP 302). Configure the final WSDL URL; redirects are not followed.',
+                $e->getMessage()
+            );
+        }
+        $this->assertStringNotContainsString('127.0.0.1', $e->getMessage());
+        $this->assertSame(['/moved-wsdl'], $this->requests());
+    }
+
+    public function testWsdlErrorStatusGivesBadRequest(): void
+    {
+        $this->startServer();
+        $fault = $this->wsdlFault('http://127.0.0.1:' . $this->port . '/missing-wsdl');
+        $this->assertTrue(Soap::isWsdlLoadFault($fault));
+
+        $e = Soap::wsdlLoadError(Soap::lastWsdlResponseStatus(), $fault);
+        $this->assertSame(400, $e->getStatusCode());
+        if (PHP_VERSION_ID >= 80400) {
+            $this->assertSame('SOAP WSDL could not be loaded (HTTP 404).', $e->getMessage());
+        }
+    }
+
+    public function testUnreachableWsdlGivesBadRequest(): void
+    {
+        $fault = $this->wsdlFault('http://127.0.0.1:9/service.wsdl');
+        $this->assertTrue(Soap::isWsdlLoadFault($fault));
+
+        $e = Soap::wsdlLoadError(Soap::lastWsdlResponseStatus(), $fault);
+        $this->assertSame(400, $e->getStatusCode());
+        $this->assertSame('SOAP WSDL could not be loaded.', $e->getMessage());
+    }
+
+    public function testWsdlLoadMessages(): void
+    {
+        $this->assertSame(
+            'SOAP WSDL address answered with a redirect (HTTP 301). Configure the final WSDL URL; redirects are not followed.',
+            Soap::wsdlLoadError(301)->getMessage()
+        );
+        $this->assertSame('SOAP WSDL could not be loaded (HTTP 500).', Soap::wsdlLoadError(500)->getMessage());
+        $this->assertSame('SOAP WSDL could not be loaded.', Soap::wsdlLoadError(200)->getMessage());
+        $this->assertSame('SOAP WSDL could not be loaded.', Soap::wsdlLoadError(null)->getMessage());
+        $this->assertFalse(Soap::isWsdlLoadFault(new \SoapFault('Server', 'Something else')));
+    }
+
+    public function testStatusFromHeaders(): void
+    {
+        $this->assertSame(302, Soap::statusFromHeaders(['HTTP/1.1 302 Found', 'Location: /x']));
+        $this->assertSame(200, Soap::statusFromHeaders("HTTP/1.1 301 Moved\r\nLocation: /x\r\n\r\nHTTP/1.1 200 OK\r\n"));
+        $this->assertNull(Soap::statusFromHeaders(null));
+        $this->assertNull(Soap::statusFromHeaders(['Content-Type: text/xml']));
+    }
+
+    public function testEndpointRedirectGivesClearBadRequest(): void
+    {
+        $this->startServer();
+        $client = new SoapClient(
+            $this->wsdlFile('http://127.0.0.1:' . $this->port . '/moved-endpoint'),
+            $this->options() + ['trace' => true]
+        );
+
+        try {
+            $client->ping('x');
+            $this->fail('the redirect should not be followed');
+        } catch (\SoapFault $fault) {
+            $e = Soap::endpointRequestError($fault, Soap::statusFromHeaders($client->__getLastResponseHeaders()));
+        }
+        $this->assertSame(400, $e->getStatusCode());
+        $this->assertSame(
+            'SOAP endpoint address answered with a redirect (HTTP 307). Configure the final endpoint URL; redirects are not followed.',
+            $e->getMessage()
+        );
+        $this->assertSame(['/moved-endpoint'], $this->requests());
+
+        // Without trace the response headers are not kept; the wording is the same.
+        $this->assertSame(
+            'SOAP endpoint address answered with a redirect. Configure the final endpoint URL; redirects are not followed.',
+            Soap::endpointRequestError($fault)->getMessage()
+        );
+    }
+
+    public function testFailedEndpointRequestGivesBadRequest(): void
+    {
+        $client = new SoapClient($this->wsdlFile('http://127.0.0.1:9/ws'), $this->options());
+
+        try {
+            @$client->ping('x');
+            $this->fail('the request should fail');
+        } catch (\SoapFault $fault) {
+            $this->assertSame('HTTP', $fault->faultcode);
+            $e = Soap::endpointRequestError($fault);
+        }
+        $this->assertSame(400, $e->getStatusCode());
+        $this->assertSame('SOAP endpoint request failed: Could not connect to host.', $e->getMessage());
+        $this->assertSame(
+            'SOAP endpoint request failed (HTTP 404): Not Found.',
+            Soap::endpointRequestError(new \SoapFault('HTTP', 'Not Found'), 404)->getMessage()
+        );
+    }
 }
