@@ -12,6 +12,12 @@ if (str_starts_with($uri, '/moved-endpoint')) {
     header('Location: /endpoint', true, 307);
     exit;
 }
+if (str_starts_with($uri, '/missing-wsdl')) {
+    http_response_code(404);
+    header('Content-Type: text/html');
+    echo '<html><body>not here</body></html>';
+    exit;
+}
 header('Content-Type: text/xml');
 if (str_starts_with($uri, '/service.wsdl')) {
     readfile($dir . '/service.wsdl');

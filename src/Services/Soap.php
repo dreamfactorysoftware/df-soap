@@ -9,6 +9,7 @@ use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
 use DreamFactory\Core\Services\BaseRestService;
+use DreamFactory\Core\Soap\Components\NTLMStream;
 use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
 use DreamFactory\Core\System\Components\ExternalUrlException;
@@ -151,6 +152,114 @@ class Soap extends BaseRestService
         };
     }
 
+    /**
+     * The HTTP status of the last WSDL or schema download, or null when it is
+     * not known (a local file, no response, or PHP before 8.4 without NTLM).
+     *
+     * @return int|null
+     */
+    public static function lastWsdlResponseStatus(): ?int
+    {
+        if (null !== NTLMStream::$lastStatus) {
+            return NTLMStream::$lastStatus ?: null;
+        }
+        if (function_exists('http_get_last_response_headers')) {
+            return static::statusFromHeaders(http_get_last_response_headers());
+        }
+
+        return null;
+    }
+
+    /**
+     * The status code of the last status line in a list of response headers.
+     *
+     * @param array|string|null $headers Header lines, as an array or as one string.
+     *
+     * @return int|null
+     */
+    public static function statusFromHeaders($headers): ?int
+    {
+        if (is_string($headers)) {
+            $headers = preg_split('/\r?\n/', $headers);
+        }
+        if (!is_array($headers)) {
+            return null;
+        }
+        $status = null;
+        foreach ($headers as $line) {
+            if (is_string($line) && preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m) === 1) {
+                $status = (int)$m[1];
+            }
+        }
+
+        return $status;
+    }
+
+    /**
+     * The 400 response for a WSDL document that could not be loaded.
+     *
+     * @param int|null $status HTTP status of the download, when known.
+     *
+     * @return BadRequestException
+     */
+    public static function wsdlLoadError(?int $status, ?\Throwable $previous = null): BadRequestException
+    {
+        if (null !== $status && $status >= 300 && $status < 400) {
+            $message = "SOAP WSDL address answered with a redirect (HTTP $status). " .
+                'Configure the final WSDL URL; redirects are not followed.';
+        } elseif (null !== $status && $status >= 400) {
+            $message = "SOAP WSDL could not be loaded (HTTP $status).";
+        } else {
+            $message = 'SOAP WSDL could not be loaded.';
+        }
+
+        return new BadRequestException($message, null, $previous);
+    }
+
+    /**
+     * The 400 response for a SOAP request that failed at the HTTP level
+     * (fault code "HTTP": no connection, a redirect, or an error status with
+     * no SOAP fault in the body). SOAP faults returned by the service itself
+     * are not handled here.
+     *
+     * @param \SoapFault $fault
+     * @param int|null   $status HTTP status of the response, when known.
+     *
+     * @return BadRequestException
+     */
+    public static function endpointRequestError(\SoapFault $fault, ?int $status = null): BadRequestException
+    {
+        $detail = trim((string)$fault->getMessage());
+        if ((null !== $status && $status >= 300 && $status < 400) ||
+            0 === stripos($detail, 'Redirection limit reached')) {
+            $message = 'SOAP endpoint address answered with a redirect' .
+                ((null !== $status) ? " (HTTP $status)" : '') .
+                '. Configure the final endpoint URL; redirects are not followed.';
+        } else {
+            $message = 'SOAP endpoint request failed' .
+                ((null !== $status) ? " (HTTP $status)" : '') .
+                (('' !== $detail) ? ': ' . rtrim($detail, '.') : '') . '.';
+        }
+
+        return new BadRequestException($message, null, $fault);
+    }
+
+    /**
+     * Whether a SoapFault from creating the client means the WSDL document (or
+     * a schema it imports) could not be loaded or parsed.
+     *
+     * @param \SoapFault $fault
+     *
+     * @return bool
+     */
+    public static function isWsdlLoadFault(\SoapFault $fault): bool
+    {
+        /** @noinspection PhpUndefinedFieldInspection */
+        $code = property_exists($fault, 'faultcode') ? $fault->faultcode : null;
+
+        return 'WSDL' === $code || 0 === strpos((string)$fault->getMessage(), 'SOAP-ERROR: Parsing');
+    }
+
     //*************************************************************************
     //* Members
     //*************************************************************************
@@ -286,7 +395,21 @@ class Soap extends BaseRestService
         $this->cacheTTL = intval(Arr::get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
 
         try {
-            $this->client = new SoapClient($this->wsdl, $options);
+            if (function_exists('http_clear_last_response_headers')) {
+                http_clear_last_response_headers();
+            }
+            NTLMStream::$lastStatus = null;
+            try {
+                $this->client = new SoapClient($this->wsdl, $options);
+            } catch (\SoapFault $fault) {
+                if (!empty($this->wsdl) && static::isWsdlLoadFault($fault)) {
+                    Log::info('SOAP service ' . $this->name . ': WSDL not loaded: ' . $fault->getMessage());
+                    throw static::wsdlLoadError(static::lastWsdlResponseStatus(), $fault);
+                }
+                throw $fault;
+            } finally {
+                NTLMStream::$lastStatus = null;
+            }
             // Without a 'location' option the endpoint address comes from the
             // WSDL document; it gets the same outbound URL check before use.
             $this->client->setLocationCheck(static::endpointCheck($checkedLocation));
@@ -341,6 +464,8 @@ class Soap extends BaseRestService
                     $this->client->__setSoapHeaders($soapHeaders);
                 }
             }
+        } catch (BadRequestException $ex) {
+            throw $ex;
         } catch (\Exception $ex) {
             throw new InternalServerErrorException("Unexpected SOAP Service Exception:\n{$ex->getMessage()}");
         }
@@ -635,6 +760,13 @@ class Soap extends BaseRestService
 
             /** @noinspection PhpUndefinedFieldInspection */
             $faultCode = (property_exists($e, 'faultcode') ? $e->faultcode : $e->getCode());
+            if ('HTTP' === $faultCode) {
+                Log::info($this->name . ' SOAP request failed: ' . $e->getMessage());
+                throw static::endpointRequestError(
+                    $e,
+                    static::statusFromHeaders($this->client->__getLastResponseHeaders())
+                );
+            }
             $errorCode = Response::HTTP_INTERNAL_SERVER_ERROR;
             // Fault code can be a string.
             if (is_numeric($faultCode) && !str_contains($faultCode, '.')) {
