@@ -3,6 +3,14 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
+
+## [0.17.4] - 2026-11-18
+- SOAP-specific connection messages that name the WSDL, endpoint or proxy address.
+- A WSDL or endpoint address that cannot be loaded returns a 400 with a SOAP message, including the HTTP status when there is one. Faults returned by the SOAP service itself are reported as before.
+- Internal WSDL, endpoint and proxy hosts, including an endpoint address given in the WSDL document, can be listed in `DF_OUTBOUND_ALLOWED_HOSTS` (df-system).
+- WSDL downloads and SOAP calls go to the configured or documented address directly; configure the final WSDL and endpoint addresses.
+- Stability and reliability improvements.
+
 ## [0.14.1] - 2018-02-25
 ### Added
 - Support for anySimpleType and others

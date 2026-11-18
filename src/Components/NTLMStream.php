@@ -34,6 +34,13 @@ class NTLMStream
     public static $password;
 
     /**
+     * HTTP status of the last download made through this stream, or null.
+     *
+     * @var int|null
+     */
+    public static $lastStatus = null;
+
+    /**
      * Open the stream
      *
      * @param mixed $path
@@ -194,7 +201,12 @@ class NTLMStream
         curl_setopt($this->ch, CURLOPT_FRESH_CONNECT, true);
         curl_setopt($this->ch, CURLOPT_HTTPAUTH, CURLAUTH_NTLM);
         curl_setopt($this->ch, CURLOPT_USERPWD, static::$user . ':' . static::$password);
+        // Use the requested address only; redirects are not followed.
+        curl_setopt($this->ch, CURLOPT_FOLLOWLOCATION, false);
+        curl_setopt($this->ch, CURLOPT_MAXREDIRS, 0);
+        curl_setopt($this->ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
         $this->buffer = curl_exec($this->ch);
+        static::$lastStatus = (int)curl_getinfo($this->ch, CURLINFO_RESPONSE_CODE);
 
         \Log::debug("[NTLMStream::createBuffer] buffer size : " . strlen($this->buffer) . "bytes");
         $this->pos = 0;

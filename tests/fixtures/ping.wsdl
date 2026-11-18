@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+             xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+             xmlns:tns="urn:df-soap-test"
+             xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+             targetNamespace="urn:df-soap-test" name="PingTest">
+    <message name="pingIn"><part name="value" type="xsd:string"/></message>
+    <message name="pingOut"><part name="result" type="xsd:string"/></message>
+    <portType name="PingPort">
+        <operation name="ping"><input message="tns:pingIn"/><output message="tns:pingOut"/></operation>
+    </portType>
+    <binding name="PingBinding" type="tns:PingPort">
+        <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+        <operation name="ping">
+            <soap:operation soapAction="urn:df-soap-test#ping"/>
+            <input><soap:body use="encoded" namespace="urn:df-soap-test" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input>
+            <output><soap:body use="encoded" namespace="urn:df-soap-test" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output>
+        </operation>
+    </binding>
+    <service name="PingService">
+        <port name="PingPort" binding="tns:PingBinding">
+            <soap:address location="__ENDPOINT__"/>
+        </port>
+    </service>
+</definitions>

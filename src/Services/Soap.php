@@ -5,11 +5,15 @@ namespace DreamFactory\Core\Soap\Services;
 use DreamFactory\Core\Components\Cacheable;
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\VerbsMask;
+use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use DreamFactory\Core\Exceptions\NotFoundException;
 use DreamFactory\Core\Services\BaseRestService;
+use DreamFactory\Core\Soap\Components\NTLMStream;
 use DreamFactory\Core\Soap\Components\WsseAuthHeader;
 use DreamFactory\Core\Soap\FunctionSchema;
+use DreamFactory\Core\System\Components\ExternalUrlException;
+use DreamFactory\Core\System\Components\SsrfValidator;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use Illuminate\Support\Facades\Request;
 use Log;
@@ -58,6 +62,202 @@ class Soap extends BaseRestService
                 'SOAP stream_context: ssl.allow_self_signed=true is not allowed.'
             );
         }
+    }
+
+    /**
+     * Check a WSDL, endpoint or proxy URL with the platform's outbound URL rules
+     * (the df-system external URL validator, applying the operator's
+     * DF_OUTBOUND_ALLOWED_HOSTS list) and word a refusal for SOAP. The rules and
+     * the 400 response are unchanged; only the message is SOAP-specific:
+     *
+     *   "<subject> must be an http or https URL."   not an http(s) URL
+     *   "<subject> host is not valid."              an http(s) URL without a usable host
+     *   "<subject> host could not be resolved."     the host name did not resolve
+     *   "<subject> host is not allowed."            the address is not accepted
+     *
+     * @param string $url     The http(s) URL to check.
+     * @param string $subject What the URL is: "SOAP WSDL", "SOAP endpoint" or "SOAP proxy".
+     *
+     * @throws BadRequestException
+     */
+    public static function assertAllowedOutboundUrl(string $url, string $subject): void
+    {
+        try {
+            SsrfValidator::validateExternalUrl($url, true);
+        } catch (BadRequestException $e) {
+            throw new BadRequestException(static::outboundRefusalMessage($url, $subject, $e), null, $e);
+        }
+    }
+
+    /**
+     * The SOAP-specific message for a refused WSDL, endpoint or proxy URL.
+     *
+     * @param string              $url
+     * @param string              $subject
+     * @param BadRequestException $e The validator's exception.
+     *
+     * @return string
+     */
+    protected static function outboundRefusalMessage(string $url, string $subject, BadRequestException $e): string
+    {
+        // ExternalUrlException carries the reason; an older df-system throws a
+        // plain BadRequestException, which keeps the general wording.
+        if ($e instanceof ExternalUrlException) {
+            switch ($e->getReason()) {
+                case ExternalUrlException::REASON_URL:
+                    return preg_match('#^https?://#i', $url) === 1
+                        ? $subject . ' host is not valid.'
+                        : $subject . ' must be an http or https URL.';
+                case ExternalUrlException::REASON_RESOLVE:
+                    return $subject . ' host could not be resolved.';
+            }
+        }
+
+        return $subject . ' host is not allowed.';
+    }
+
+    /**
+     * Add the options that turn off HTTP redirects to a stream context array.
+     * The 'http' options also apply to https URLs.
+     *
+     * @param array $context stream_context_create() options
+     *
+     * @return array
+     */
+    public static function withoutRedirects(array $context): array
+    {
+        $http = (isset($context['http']) && is_array($context['http'])) ? $context['http'] : [];
+        $http['follow_location'] = 0;
+        $http['max_redirects'] = 1;
+        $context['http'] = $http;
+
+        return $context;
+    }
+
+    /**
+     * The check run on each endpoint address before a SOAP request is sent.
+     *
+     * @param string|null $checkedLocation A configured 'location' that has
+     *                                     already been checked, or null.
+     *
+     * @return callable function (string $location): void
+     */
+    public static function endpointCheck(?string $checkedLocation): callable
+    {
+        return static function (string $location) use ($checkedLocation): void {
+            if (null !== $checkedLocation && $location === $checkedLocation) {
+                return;
+            }
+            static::assertAllowedOutboundUrl($location, 'SOAP endpoint');
+        };
+    }
+
+    /**
+     * The HTTP status of the last WSDL or schema download, or null when it is
+     * not known (a local file, no response, or PHP before 8.4 without NTLM).
+     *
+     * @return int|null
+     */
+    public static function lastWsdlResponseStatus(): ?int
+    {
+        if (null !== NTLMStream::$lastStatus) {
+            return NTLMStream::$lastStatus ?: null;
+        }
+        if (function_exists('http_get_last_response_headers')) {
+            return static::statusFromHeaders(http_get_last_response_headers());
+        }
+
+        return null;
+    }
+
+    /**
+     * The status code of the last status line in a list of response headers.
+     *
+     * @param array|string|null $headers Header lines, as an array or as one string.
+     *
+     * @return int|null
+     */
+    public static function statusFromHeaders($headers): ?int
+    {
+        if (is_string($headers)) {
+            $headers = preg_split('/\r?\n/', $headers);
+        }
+        if (!is_array($headers)) {
+            return null;
+        }
+        $status = null;
+        foreach ($headers as $line) {
+            if (is_string($line) && preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m) === 1) {
+                $status = (int)$m[1];
+            }
+        }
+
+        return $status;
+    }
+
+    /**
+     * The 400 response for a WSDL document that could not be loaded.
+     *
+     * @param int|null $status HTTP status of the download, when known.
+     *
+     * @return BadRequestException
+     */
+    public static function wsdlLoadError(?int $status, ?\Throwable $previous = null): BadRequestException
+    {
+        if (null !== $status && $status >= 300 && $status < 400) {
+            $message = "SOAP WSDL address answered with a redirect (HTTP $status). " .
+                'Configure the final WSDL URL; redirects are not followed.';
+        } elseif (null !== $status && $status >= 400) {
+            $message = "SOAP WSDL could not be loaded (HTTP $status).";
+        } else {
+            $message = 'SOAP WSDL could not be loaded.';
+        }
+
+        return new BadRequestException($message, null, $previous);
+    }
+
+    /**
+     * The 400 response for a SOAP request that failed at the HTTP level
+     * (fault code "HTTP": no connection, a redirect, or an error status with
+     * no SOAP fault in the body). SOAP faults returned by the service itself
+     * are not handled here.
+     *
+     * @param \SoapFault $fault
+     * @param int|null   $status HTTP status of the response, when known.
+     *
+     * @return BadRequestException
+     */
+    public static function endpointRequestError(\SoapFault $fault, ?int $status = null): BadRequestException
+    {
+        $detail = trim((string)$fault->getMessage());
+        if ((null !== $status && $status >= 300 && $status < 400) ||
+            0 === stripos($detail, 'Redirection limit reached')) {
+            $message = 'SOAP endpoint address answered with a redirect' .
+                ((null !== $status) ? " (HTTP $status)" : '') .
+                '. Configure the final endpoint URL; redirects are not followed.';
+        } else {
+            $message = 'SOAP endpoint request failed' .
+                ((null !== $status) ? " (HTTP $status)" : '') .
+                (('' !== $detail) ? ': ' . rtrim($detail, '.') : '') . '.';
+        }
+
+        return new BadRequestException($message, null, $fault);
+    }
+
+    /**
+     * Whether a SoapFault from creating the client means the WSDL document (or
+     * a schema it imports) could not be loaded or parsed.
+     *
+     * @param \SoapFault $fault
+     *
+     * @return bool
+     */
+    public static function isWsdlLoadFault(\SoapFault $fault): bool
+    {
+        /** @noinspection PhpUndefinedFieldInspection */
+        $code = property_exists($fault, 'faultcode') ? $fault->faultcode : null;
+
+        return 'WSDL' === $code || 0 === strpos((string)$fault->getMessage(), 'SOAP-ERROR: Parsing');
     }
 
     //*************************************************************************
@@ -117,7 +317,7 @@ class Soap extends BaseRestService
             // SoapClient fetches it. SoapClient uses libxml under the hood
             // which will follow http(s) URLs to load the WSDL document.
             if (preg_match('#^https?://#i', $this->wsdl) === 1) {
-                \DreamFactory\Core\System\Components\SsrfValidator::validateExternalUrl($this->wsdl);
+                static::assertAllowedOutboundUrl($this->wsdl, 'SOAP WSDL');
             } elseif ((!str_contains($this->wsdl, '/')) && (!str_contains($this->wsdl, '\\'))) {
                 // no directories involved, store it where we want to store it
                 if (!empty($storage = storage_path('wsdl'))) {
@@ -160,18 +360,59 @@ class Soap extends BaseRestService
                         // could disable certificate validation on WSDL
                         // fetch and SOAP request, enabling MITM.
                         self::assertSafeStreamContext($value);
-                        $context = stream_context_create($value);
-                        $options[$key] = $context;
+                        $context = stream_context_create(static::withoutRedirects($value));
+                        unset($options[$key]);
+                        $options['stream_context'] = $context;
                     }
                 }
             }
+        }
+        // WSDL downloads and SOAP requests go to the configured or documented
+        // address only; HTTP redirects are not followed.
+        if (!isset($options['stream_context']) || !is_resource($options['stream_context'])) {
+            $options['stream_context'] = stream_context_create(static::withoutRedirects([]));
+        }
+
+        // The 'location' option is the endpoint the SOAP request is sent to.
+        // In non-WSDL mode it fully determines the outbound target, and even
+        // with a WSDL it overrides the address from the document. Validate its
+        // scheme + host the same way the WSDL URL is validated above.
+        $checkedLocation = null;
+        if (isset($options['location']) && is_string($options['location'])
+            && preg_match('#^https?://#i', $options['location']) === 1) {
+            static::assertAllowedOutboundUrl($options['location'], 'SOAP endpoint');
+            $checkedLocation = $options['location'];
+        }
+
+        // 'proxy_host' routes the outbound SOAP request through an HTTP proxy.
+        // An internal address here is the same SSRF class as 'location', so
+        // validate it too. It is a bare host, so wrap it in a scheme first.
+        if (isset($options['proxy_host']) && is_string($options['proxy_host'])) {
+            static::assertAllowedOutboundUrl('http://' . $options['proxy_host'], 'SOAP proxy');
         }
 
         $this->cacheEnabled = array_get_bool($config, 'cache_enabled');
         $this->cacheTTL = intval(Arr::get($config, 'cache_ttl', \Config::get('df.default_cache_ttl')));
 
         try {
-            $this->client = new SoapClient($this->wsdl, $options);
+            if (function_exists('http_clear_last_response_headers')) {
+                http_clear_last_response_headers();
+            }
+            NTLMStream::$lastStatus = null;
+            try {
+                $this->client = new SoapClient($this->wsdl, $options);
+            } catch (\SoapFault $fault) {
+                if (!empty($this->wsdl) && static::isWsdlLoadFault($fault)) {
+                    Log::info('SOAP service ' . $this->name . ': WSDL not loaded: ' . $fault->getMessage());
+                    throw static::wsdlLoadError(static::lastWsdlResponseStatus(), $fault);
+                }
+                throw $fault;
+            } finally {
+                NTLMStream::$lastStatus = null;
+            }
+            // Without a 'location' option the endpoint address comes from the
+            // WSDL document; it gets the same outbound URL check before use.
+            $this->client->setLocationCheck(static::endpointCheck($checkedLocation));
 //            $this->dom = new \DOMDocument();
 //            if (!empty($this->wsdl)) {
 //                $this->dom->load($this->wsdl);
@@ -223,6 +464,8 @@ class Soap extends BaseRestService
                     $this->client->__setSoapHeaders($soapHeaders);
                 }
             }
+        } catch (BadRequestException $ex) {
+            throw $ex;
         } catch (\Exception $ex) {
             throw new InternalServerErrorException("Unexpected SOAP Service Exception:\n{$ex->getMessage()}");
         }
@@ -517,6 +760,13 @@ class Soap extends BaseRestService
 
             /** @noinspection PhpUndefinedFieldInspection */
             $faultCode = (property_exists($e, 'faultcode') ? $e->faultcode : $e->getCode());
+            if ('HTTP' === $faultCode) {
+                Log::info($this->name . ' SOAP request failed: ' . $e->getMessage());
+                throw static::endpointRequestError(
+                    $e,
+                    static::statusFromHeaders($this->client->__getLastResponseHeaders())
+                );
+            }
             $errorCode = Response::HTTP_INTERNAL_SERVER_ERROR;
             // Fault code can be a string.
             if (is_numeric($faultCode) && !str_contains($faultCode, '.')) {
