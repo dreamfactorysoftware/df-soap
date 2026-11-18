@@ -4,6 +4,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 - SOAP-specific messages when a WSDL, endpoint or proxy URL is refused: `SOAP endpoint host is not allowed.`, `SOAP endpoint host could not be resolved.`, `SOAP endpoint host is not valid.` or `SOAP endpoint must be an http or https URL.` (likewise for `SOAP WSDL` and `SOAP proxy`). Internal WSDL, endpoint and proxy hosts can be listed in `DF_OUTBOUND_ALLOWED_HOSTS` (df-system).
+- The endpoint address read from a WSDL document gets the same outbound URL check as the WSDL and `location` URLs, so hosts listed in `DF_OUTBOUND_ALLOWED_HOSTS` work for it too.
+- WSDL downloads and SOAP requests go to the configured or documented address only; HTTP redirects are not followed. `follow_location` and `max_redirects` set in `stream_context` are replaced.
 ## [0.14.1] - 2018-02-25
 ### Added
 - Support for anySimpleType and others

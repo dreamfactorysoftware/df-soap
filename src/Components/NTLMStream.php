@@ -194,6 +194,10 @@ class NTLMStream
         curl_setopt($this->ch, CURLOPT_FRESH_CONNECT, true);
         curl_setopt($this->ch, CURLOPT_HTTPAUTH, CURLAUTH_NTLM);
         curl_setopt($this->ch, CURLOPT_USERPWD, static::$user . ':' . static::$password);
+        // Use the requested address only; redirects are not followed.
+        curl_setopt($this->ch, CURLOPT_FOLLOWLOCATION, false);
+        curl_setopt($this->ch, CURLOPT_MAXREDIRS, 0);
+        curl_setopt($this->ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
         $this->buffer = curl_exec($this->ch);
 
         \Log::debug("[NTLMStream::createBuffer] buffer size : " . strlen($this->buffer) . "bytes");
