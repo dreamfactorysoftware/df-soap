@@ -3,10 +3,14 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
-- SOAP-specific messages when a WSDL, endpoint or proxy URL is refused: `SOAP endpoint host is not allowed.`, `SOAP endpoint host could not be resolved.`, `SOAP endpoint host is not valid.` or `SOAP endpoint must be an http or https URL.` (likewise for `SOAP WSDL` and `SOAP proxy`). Internal WSDL, endpoint and proxy hosts can be listed in `DF_OUTBOUND_ALLOWED_HOSTS` (df-system).
-- The endpoint address read from a WSDL document gets the same outbound URL check as the WSDL and `location` URLs, so hosts listed in `DF_OUTBOUND_ALLOWED_HOSTS` work for it too.
-- WSDL downloads and SOAP requests go to the configured or documented address only; HTTP redirects are not followed. `follow_location` and `max_redirects` set in `stream_context` are replaced.
-- A WSDL that cannot be loaded, and a SOAP request that fails at the HTTP level, return 400 with a SOAP message instead of 500: `SOAP WSDL address answered with a redirect (HTTP 302). Configure the final WSDL URL; redirects are not followed.`, `SOAP WSDL could not be loaded (HTTP 404).`, `SOAP WSDL could not be loaded.`, `SOAP endpoint address answered with a redirect. Configure the final endpoint URL; redirects are not followed.` or `SOAP endpoint request failed: Could not connect to host.`. Faults returned by the SOAP service itself are reported as before.
+
+## [0.17.4] - 2026-11-18
+- SOAP-specific connection messages that name the WSDL, endpoint or proxy address.
+- A WSDL or endpoint address that cannot be loaded returns a 400 with a SOAP message, including the HTTP status when there is one. Faults returned by the SOAP service itself are reported as before.
+- Internal WSDL, endpoint and proxy hosts, including an endpoint address given in the WSDL document, can be listed in `DF_OUTBOUND_ALLOWED_HOSTS` (df-system).
+- WSDL downloads and SOAP calls go to the configured or documented address directly; configure the final WSDL and endpoint addresses.
+- Stability and reliability improvements.
+
 ## [0.14.1] - 2018-02-25
 ### Added
 - Support for anySimpleType and others
